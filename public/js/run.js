@@ -214,6 +214,16 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     $('.nav-legend', nav).innerHTML = isExam && s.phase === 'answering'
       ? '<span class="lg answered">answered</span><span class="lg">open</span><span class="lg-star">starred</span>'
       : '<span class="lg right">right</span><span class="lg wrong">wrong</span><span class="lg partial">partial</span><span class="lg-star">starred</span>';
+    showCurrentCell();
+  }
+
+  /** Keep the current question's cell in sight in a long list (centred when it was out of view; hidden list: nothing). */
+  function showCurrentCell() {
+    const grid = $('.nav-grid', nav), cell = $('.nav-cell.current', grid);
+    if (!cell || grid.scrollHeight <= grid.clientHeight) return;
+    const g = grid.getBoundingClientRect(), c = cell.getBoundingClientRect();
+    if (!g.height || (c.top >= g.top && c.bottom <= g.bottom)) return;
+    grid.scrollTop += c.top - g.top - (grid.clientHeight - c.height) / 2;
   }
 
   /** Practice: a revealed short answer / definition must be self-graded before moving on (else it is never counted). */
@@ -254,27 +264,26 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     if (!isOpen(question.type)) {
       try { await recordAttempt(courseId, { qid: question.id, correct: st.result.correct, score: st.result.score, response: st.response, mode: s.module }); }
       catch (e) { toast(`Not saved: ${e.message}`, 'error'); }
-      drawNav();
-      draw();
+      if (main.isConnected && q() === question) draw(); // the updated counts, unless Next was already tapped
+      else drawNav();
     }
   }
 
-  async function selfGrade(question, st, v, mode) {
+  function selfGrade(question, st, v, mode) {
     const first = !st.selfGrade;
     st.selfGrade = v;
     const score = v === 'right' ? 1 : v === 'partial' ? 0.5 : 0;
     st.result = { ...(st.result || {}), correct: v === 'right', score };
     save();
+    // the answer is logged in the background: moving on never waits for the server
     if (mode !== 'grade' && first) {
-      try { await recordAttempt(courseId, { qid: question.id, correct: v === 'right', score, response: st.response, mode: s.module }); }
-      catch (e) { toast(`Not saved: ${e.message}`, 'error'); }
+      recordAttempt(courseId, { qid: question.id, correct: v === 'right', score, response: st.response, mode: s.module })
+        .then(() => { if (main.isConnected && q() === question) draw(); }) // still on it: show the updated counts
+        .catch((e) => toast(`Not saved: ${e.message}`, 'error'));
     }
-    draw();
-    // first grade moves on by itself after a beat (so the choice shows); re-grading stays put, the last question waits for Finish
-    const at = curIdx();
-    if (first && mode !== 'review' && at < view().ids.length - 1) {
-      setTimeout(() => { if (main.isConnected && curIdx() === at && q() === question) go(1); }, 350);
-    }
+    // the first grade moves straight on; re-grading stays put, and the last question waits for Finish
+    if (first && mode !== 'review' && curIdx() < view().ids.length - 1) go(1);
+    else draw();
   }
 
   async function handIn(auto = false) {
@@ -392,7 +401,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     }
     const act = t.dataset.act;
     if (act === 'exit') exit();
-    else if (act === 'nav') nav.classList.toggle('open');
+    else if (act === 'nav') { nav.classList.toggle('open'); showCurrentCell(); }
     else if (act === 'reparse') {
       const res = await openReparse(courseId, q().id);
       if (!res) return;
@@ -444,7 +453,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     if (k === 'Enter') { $('[data-act="main"]', root).click(); e.preventDefault(); return; }
     if (k === 's' || k === 'S') { $('[data-act="star"]', main).click(); return; }
     if ((k === 'g' || k === 'G') && !$('.verify', root).hidden) { $('.verify', root).click(); return; }
-    if (k === 'm' || k === 'M') { nav.classList.toggle('open'); return; }
+    if (k === 'm' || k === 'M') { nav.classList.toggle('open'); showCurrentCell(); return; }
     if (k === 'Escape') { nav.classList.remove('open'); return; }
     const up = k.toUpperCase();
     const question = q();

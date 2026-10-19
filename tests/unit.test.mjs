@@ -6,7 +6,7 @@ import path from 'node:path';
 
 process.env.EXAM_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-unit-'));
 const { evaluate, parseNumeric, grade, normText, answerText } = await import('../public/js/grade.js');
-const { normalizeQuestion, normalizeAll, parseLetters, parseCalcPart } = await import('../lib/normalize.mjs');
+const { normalizeQuestion, normalizeAll, parseLetters, parseCalcPart, blanksAnyOrder } = await import('../lib/normalize.mjs');
 const { parseMarkdown } = await import('../lib/parse-md.mjs');
 const store = await import('../lib/store.mjs');
 const { pickQuestions, scoreExam, moduleConfig, examConfigured, examSummary } = await import('../public/js/session.js');
@@ -105,6 +105,44 @@ test('grading per type', () => {
   const r = grade(short, 'speed is a Scalar');
   assert.equal(r.correct, null);
   assert.deepEqual(r.detail.keywordHits, ['scalar']);
+});
+
+test('fill blanks in any order', () => {
+  // "____和____" names two things in no particular order
+  const cpu = normalizeQuestion({ stem: '中央处理器 (CPU) 的基本部件是____和____。', answer: '运算器; 控制器' });
+  assert.equal(cpu.anyOrder, true);
+  assert.equal(grade(cpu, ['控制器', '运算器']).correct, true, 'swapped is right');
+  assert.equal(grade(cpu, ['运算器', '控制器']).correct, true);
+  assert.equal(grade(cpu, ['控制器', '控制器']).score, 0.5, 'one key is not good for two blanks');
+  const half = grade(cpu, ['存储器', '运算器']);
+  assert.deepEqual([half.score, half.detail.blanks, half.detail.keys], [0.5, [false, true], [['控制器'], ['运算器']]], 'a wrong blank is shown the key still owed');
+  assert.equal(answerText(cpu), '运算器; 控制器 (any order)');
+  assert.deepEqual([blanksAnyOrder('____与____'), blanksAnyOrder('A ___ or ___ B'), blanksAnyOrder('one blank ____')], [true, true, false]);
+  assert.deepEqual([blanksAnyOrder('实现____、____、人民幸福'), blanksAnyOrder('分为 ____ 和 ____ 两种，前者用于…')], [false, false], 'set phrases (、) and 前者/后者 keep their order');
+
+  // order matters when the blanks are apart, or the stem says so
+  for (const stem of ['指令序列称为____，指令操作的对象是____。', '立即数前加 ____ 符号，寄存器前加 ____ 符号', '它们分别是____和____。', '____，____，是初心和使命。']) {
+    const q = normalizeQuestion({ stem, answer: 'a; b' });
+    assert.ok(!q.anyOrder, stem);
+    assert.equal(grade(q, ['b', 'a']).correct, false);
+  }
+  // said explicitly, either way
+  assert.equal(normalizeQuestion({ stem: 'x ____, y ____', answer: 'a; b', anyOrder: true }).anyOrder, true);
+  assert.ok(!normalizeQuestion({ stem: '____和____', answer: 'a; b', order: 'fixed' }).anyOrder);
+  const [md] = parseMarkdown('1. 前者是 ____，后者是 ____。\n答案：甲；乙\n顺序：任意\n').questions;
+  assert.equal(normalizeQuestion(md).anyOrder, true, 'Markdown: 顺序：任意');
+});
+
+test('store: patching a question keeps its id, source text and progress', () => {
+  const c = store.createCourse({ name: 'Patch Course' });
+  store.importQuestions(c.id, [{ stem: 'x ____ y ____', answer: 'a; b' }]);
+  const [q] = store.getCourse(c.id).questions;
+  store.recordAttempt(c.id, 0, { qid: q.id, correct: false });
+  assert.equal(store.patchQuestion(c.id, q.id, { anyOrder: true }).anyOrder, true);
+  assert.equal(store.getCourse(c.id).questions[0].anyOrder, true);
+  assert.equal(store.getProgress(c.id, 0).questions[q.id].wrong, 1);
+  assert.ok(!('anyOrder' in store.patchQuestion(c.id, q.id, { anyOrder: null })), 'null removes a field');
+  assert.throws(() => store.patchQuestion(c.id, q.id, { id: 'other' }), /keeps its id/);
 });
 
 test('answerText', () => {

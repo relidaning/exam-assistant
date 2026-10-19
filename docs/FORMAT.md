@@ -18,6 +18,7 @@ Everything is normalized into one schema (`lib/normalize.mjs`). Input can be loo
   "source": "2023 final, uni X website",
   "score": 4,                    // points in mock exams (default per type: 2/3/1/2/5/5)
   "keywords": ["…"],             // short answers: key points highlighted when self-grading
+  "anyOrder": true,              // fill: blanks may be answered in any order (each key used once)
   "media": [{ "type": "image|audio|video|pdf", "src": "/media/<course>/file.png", "caption": "…" }]
 }
 ```
@@ -32,6 +33,9 @@ Everything is normalized into one schema (`lib/normalize.mjs`). Input can be loo
 | short | reference answer text (Markdown) | string |
 
 Blanks in fill questions are `___` (3+ underscores) or cloze `{{answer|alt}}` (answer taken from the braces).
+Blanks side by side joined only by 和 / 与 / 及 / 或 / and / or (`____和____`) are graded in any order, unless the stem
+says 分别 / 依次 / 前者 / respectively. Lists joined by 、 or commas keep their order (often set phrases). Set `anyOrder`
+(or `Order: any` / `顺序：任意`, `Order: fixed` / `顺序：固定`) to decide either way.
 Calculation grading: absolute `tol`, relative `rel`, default ±1 % relative. Users may type expressions (`2*sqrt(2)`, `1/3`, `pi/4`, `1.2e-3`) and units.
 
 A JSON file may be an array of questions or `{ "course": "...", "chapter": "...", "tags": "...", "questions": [...] }` (top-level fields become defaults).
@@ -67,7 +71,7 @@ C. option   D. option
 ```
 
 Other fields (one line each): `Type/题型`, `Tags/标签`, `Difficulty/难度`, `Source/来源`, `Chapter/章节`,
-`Unit/单位`, `Tolerance/误差`, `Keywords/得分点/要点`, `Score/分值`.
+`Unit/单位`, `Tolerance/误差`, `Keywords/得分点/要点`, `Score/分值`, `Order/顺序` (fill: `any`/`任意` or `fixed`/`固定`).
 
 Rules worth knowing:
 - A numbered line at column 0 (`12.`, `12、`, `12)`) starts a new question. Inside a multi-line answer or explanation a

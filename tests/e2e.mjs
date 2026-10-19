@@ -395,9 +395,15 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
   check((await page.textContent('.run-count')).startsWith('1') && (await page.$('[data-act="main"][data-blocked]')) !== null, 'Next is held until the revealed answer is graded');
+  await page.route('**/attempt', async (r) => { await new Promise((ok) => setTimeout(ok, 1500)); await r.continue().catch(() => {}); }); // a slow server
+  const t0 = Date.now();
   await page.keyboard.press('n');
   await page.waitForFunction(() => document.querySelector('.run-count').textContent.startsWith('2'));
-  check(true, 'grading moves on to the next question');
+  const waited = Date.now() - t0;
+  check(waited < 400, `grading moves on to the next question at once, without waiting for the server (${waited} ms)`);
+  await page.waitForTimeout(1700); // let the delayed save land
+  await page.unroute('**/attempt');
+  check((await page.textContent('.run-count')).startsWith('2'), 'and the save landing later does not redraw the old question');
   await clearRound(page, 'practice');
 
   // practice clock: time away from the round doesn't count
@@ -452,6 +458,29 @@ try {
   await page.waitForSelector('.qcard');
   check((await page.textContent('.run-count')).startsWith('3'), 'and the first address picks up where the other left off');
   await other.close();
+
+  // a long round: the question list on the side scrolls to the current question
+  console.log('long round');
+  await page.evaluate(async (ids) => {
+    const [{ newSession }, d] = await Promise.all([import('/js/run.js'), import('/js/data.js')]);
+    const s = newSession('demo', 'practice', Array.from({ length: 150 }, (_, i) => ids[i % ids.length]), { title: 'Long round', slot: 'drill' });
+    s.idx = 100;
+    d.sessions.save(s);
+    await d.flushSessions('demo');
+  }, (await (await authed(`${base}/api/courses/demo`)).json()).course.questions.map((q) => q.id));
+  await page.goto(`${base}/#/c/demo/run/drill`);
+  await page.waitForSelector('.nav-cell.current');
+  const inSight = () => page.evaluate(() => {
+    const g = document.querySelector('.nav-grid').getBoundingClientRect(), c = document.querySelector('.nav-cell.current').getBoundingClientRect();
+    return [document.querySelector('.nav-cell.current').textContent.replace('★', ''), c.top >= g.top && c.bottom <= g.bottom && document.querySelector('.nav-grid').scrollTop > 0];
+  });
+  let [num, seen] = await inSight();
+  check(num === '101' && seen, `the question list shows the current question (${num}) in a 150-question round, not the top of the list`);
+  await page.click('.nav-cell[data-go="149"]');
+  await page.waitForFunction(() => document.querySelector('.nav-cell.current')?.dataset.go === '149');
+  [num, seen] = await inSight();
+  check(num === '150' && seen, 'and follows it when you jump to the last one');
+  await clearRound(page, 'drill');
 
   // the In progress tab: every unfinished round, resumable and deletable
   console.log('in progress tab');

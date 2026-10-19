@@ -177,7 +177,7 @@ function fillBlanks(stem, q, st, ctx, show) {
   const slots = [...stem.querySelectorAll('.blank-slot')];
   const blanksOk = st.result?.detail?.blanks || [];
   slots.forEach((slot, i) => {
-    const want = q.answer[i] || [];
+    const want = st.result?.detail?.keys?.[i] || q.answer[i] || []; // any-order questions: the key this blank was paired with
     const input = document.createElement('input');
     input.type = 'text';
     input.className = 'blank-input';

@@ -157,6 +157,25 @@ function textMatches(user, accepted) {
   return false;
 }
 
+/**
+ * Pair a fill question's blanks with its answer keys in whatever order gives the most right (each key used once).
+ * Returns the key for each blank; a blank left unmatched gets one of the keys still owed, to show as its answer.
+ */
+function matchAnyOrder(resp, answer) {
+  const n = answer.length, keyOf = Array(n).fill(-1), blankOf = Array(n).fill(-1);
+  const assign = (b, seen) => { // augmenting path: take a free key, or move the blank that holds one elsewhere
+    for (let k = 0; k < n; k++) {
+      if (seen[k] || !textMatches(resp[b], answer[k])) continue;
+      seen[k] = true;
+      if (blankOf[k] < 0 || assign(blankOf[k], seen)) { blankOf[k] = b; keyOf[b] = k; return true; }
+    }
+    return false;
+  };
+  for (let b = 0; b < n; b++) assign(b, []);
+  const owed = answer.map((_, k) => k).filter((k) => blankOf[k] < 0);
+  return keyOf.map((k) => answer[k >= 0 ? k : owed.shift()]);
+}
+
 function tryEval(s) {
   try { return evaluate(s); } catch { return null; }
 }
@@ -195,9 +214,11 @@ export function grade(q, response) {
     }
     case 'fill': {
       const resp = response || [];
-      const blanks = q.answer.map((accepted, i) => textMatches(resp[i], accepted));
+      // any order: each blank is checked against the key it was matched with ("运算器 / 控制器" either way round)
+      const keys = q.anyOrder ? matchAnyOrder(resp, q.answer) : q.answer;
+      const blanks = keys.map((accepted, i) => textMatches(resp[i], accepted));
       const n = blanks.filter(Boolean).length;
-      return { correct: n === blanks.length, score: blanks.length ? n / blanks.length : 0, detail: { blanks } };
+      return { correct: n === blanks.length, score: blanks.length ? n / blanks.length : 0, detail: { blanks, ...(q.anyOrder ? { keys } : {}) } };
     }
     case 'calc': {
       const resp = response || [];
@@ -236,7 +257,7 @@ export function answerText(q) {
     case 'single': return LETTERS[q.answer];
     case 'multi': return q.answer.map((i) => LETTERS[i]).join('');
     case 'judge': return q.answer ? 'True' : 'False';
-    case 'fill': return q.answer.map((alts) => alts.join(' / ')).join('; ');
+    case 'fill': return q.answer.map((alts) => alts.join(' / ')).join('; ') + (q.anyOrder && q.answer.length > 1 ? ' (any order)' : '');
     case 'calc': return q.answer.map((p) => `${p.label ? p.label + ' = ' : ''}${fmtNum(p.value)}${p.unit ? ' ' + p.unit : ''}`).join('; ');
     case 'short':
     case 'essay':
