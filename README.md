@@ -11,8 +11,10 @@ npm start        # http://localhost:8710  (also printed: the LAN address for you
 
 ## Accounts and sharing
 
-Everyone signs in with a username and password; anyone who can reach the app can create an account. The first
-account becomes the **admin** and takes over the courses and progress that existed before accounts.
+Everyone signs in, with a username and password or with **Google / GitHub**; anyone who can reach the app can create
+an account. The first account becomes the **admin** and takes over the courses and progress that existed before
+accounts. On the **Account** page (the round button top right) you can link Google and GitHub to an existing account,
+unlink them, and set or change a password.
 
 - **Courses** are private (only you see them) or **public** (everyone signed in sees them under *Public courses* and
   can practise them). A course you create starts private; **Publish** on its page shares it, **Make private** takes
@@ -23,6 +25,32 @@ account becomes the **admin** and takes over the courses and progress that exist
 - **Progress is private.** Every answer, star, note, mock exam result, unfinished round and study setting belongs to
   your account. Your settings start from the owner's and changing them affects only you.
 - The admin can unpublish or delete any public course (moderation), but can't edit it or see private courses.
+
+### Setting up Google / GitHub sign-in
+
+The buttons appear once a provider has a client id and secret, in `data/oauth.json` (read on every sign-in, no
+restart needed) or in environment variables (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GITHUB_CLIENT_ID`,
+`GITHUB_CLIENT_SECRET`, `EXAM_PUBLIC_URL`, `GOOGLE_PUBLIC_URL`, `GITHUB_PUBLIC_URL`):
+
+```json
+{
+  "publicUrl": "http://192.168.1.7:8710",
+  "github": { "clientId": "…", "clientSecret": "…" },
+  "google": { "clientId": "…", "clientSecret": "…", "publicUrl": "http://localhost:8710" }
+}
+```
+
+The callback to register with a provider is `<publicUrl>/api/auth/oauth/<google|github>/callback`. Sign-in always
+finishes at that address, so open the app there.
+
+- **GitHub**: Settings → Developer settings → OAuth Apps → New OAuth App. Homepage URL `<publicUrl>`, callback URL as
+  above. A LAN address like `http://192.168.1.7:8710` works.
+- **Google**: Google Cloud console → APIs & Services → Credentials → Create OAuth client ID (Web application), with
+  the callback as an authorized redirect URI. Google accepts only `localhost` or a real domain (for example an HTTPS
+  name from a reverse proxy or Tailscale), not a LAN IP, so on a phone over the LAN use GitHub or the password.
+
+Accounts are matched by the provider's user id, never by email; joining a Google/GitHub account to an existing one
+only happens by linking it from the Account page while signed in.
 
 ## Flow
 

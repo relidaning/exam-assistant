@@ -11,6 +11,7 @@ const shots = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'exam-sho
 fs.mkdirSync(shots, { recursive: true });
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-data-'));
 process.env.EXAM_DATA_DIR = dataDir;
+Object.assign(process.env, { GOOGLE_CLIENT_ID: 'e2e', GOOGLE_CLIENT_SECRET: 'e2e', GITHUB_CLIENT_ID: 'e2e', GITHUB_CLIENT_SECRET: 'e2e' }); // shows the buttons
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 execFileSync('node', [path.join(root, 'scripts/import.mjs'), '--course', 'Demo', path.join(root, 'examples/demo-course.md')], { env: process.env, stdio: 'ignore' });
 const { createServer } = await import('../server.mjs');
@@ -433,6 +434,9 @@ try {
   await visitor.goto(`${base}/#/c/demo`);
   await visitor.waitForSelector('.login-card');
   check(visitor.url().includes('#/login?next='), 'signed out: the app asks you to sign in');
+  check((await visitor.$$('.oauth-btn')).length === 2 && (await visitor.getAttribute('.oauth-btn', 'href')).startsWith('/api/auth/oauth/google/start?next='), 'Google and GitHub buttons, keeping where you were going');
+  const toGoogle = await visitor.evaluate(async () => (await fetch('/api/auth/oauth/github/start?next=%2F', { redirect: 'manual' })).type);
+  check(toGoogle === 'opaqueredirect', 'the button redirects to the provider');
   await visitor.screenshot({ path: `${shots}/40-login.png` });
   await visitor.click('[data-act="switch"]');
   await visitor.fill('input[name="username"]', 'visitor');
@@ -465,6 +469,10 @@ try {
   await visitor.screenshot({ path: `${shots}/42-fork.png` });
   const ownerList = await (await authed(`${base}/api/courses`)).json();
   check(!ownerList.some((c) => c.id === 'demo-visitor'), 'the fork stays private to its owner');
+  await visitor.click('[data-act="account"]');
+  await visitor.waitForSelector('.signin-list');
+  check((await visitor.$$('.signin-list a.btn')).length === 2, 'the account page offers linking Google and GitHub');
+  await visitor.screenshot({ path: `${shots}/43-account.png` });
   await visitor.close();
 
   // ---------- phone ----------

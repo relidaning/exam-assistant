@@ -617,3 +617,82 @@ test('migration: a database from before accounts keeps everything, published, fo
     [true, false, 'public', true, 1, true, 1, ['practice'], 9, 1, {}]);
   assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
 });
+
+test('Google/GitHub sign-in: new account, same account next time, linking, forged state', async () => {
+  const http = await import('node:http');
+  const oauth = await import('../lib/oauth.mjs');
+  // a fake GitHub: the code says which GitHub user signs in
+  const fake = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/token') {
+        const code = new URLSearchParams(body).get('code');
+        return res.end(JSON.stringify(code === 'bad' ? { error: 'bad_verification_code' } : { access_token: `tok-${code}` }));
+      }
+      const who = String(req.headers.authorization).replace('Bearer tok-', '');
+      res.end(JSON.stringify({ id: { octo: 101, other: 202, ann: 303 }[who], login: who === 'octo' ? 'octo cat' : who, email: null }));
+    });
+  });
+  await new Promise((r) => fake.listen(0, '127.0.0.1', r));
+  const fakeBase = `http://127.0.0.1:${fake.address().port}`;
+  Object.assign(oauth.PROVIDERS.github, { tokenUrl: `${fakeBase}/token`, userUrl: `${fakeBase}/user` });
+  process.env.GITHUB_CLIENT_ID = 'cid';
+  process.env.GITHUB_CLIENT_SECRET = 'csecret';
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const get = (url, cookie = '') => fetch(base + url, { redirect: 'manual', headers: { cookie } });
+  const cookieOf = (res, name) => (res.headers.getSetCookie().find((c) => c.startsWith(`${name}=`)) || '').split(';')[0];
+  /** Run the whole round trip; returns the final redirect and the cookies it set. */
+  const signInWith = async (code, { next = '/c/x', session = '', link = false, state } = {}) => {
+    const start = await get(`/api/auth/oauth/github/start?next=${encodeURIComponent(next)}${link ? '&link=1' : ''}`, session);
+    assert.equal(start.status, 302);
+    const to = new URL(start.headers.get('location'));
+    assert.equal(to.origin + to.pathname, 'https://github.com/login/oauth/authorize');
+    assert.equal(to.searchParams.get('redirect_uri'), `${base}/api/auth/oauth/github/callback`);
+    assert.equal(to.searchParams.get('client_id'), 'cid');
+    const done = await get(`/api/auth/oauth/github/callback?code=${code}&state=${state ?? to.searchParams.get('state')}`, [session, cookieOf(start, 'ea_oauth')].filter(Boolean).join('; '));
+    assert.equal(done.status, 302);
+    return { location: done.headers.get('location'), session: cookieOf(done, 'ea_sid') };
+  };
+  const me = async (session) => (await (await get('/api/auth/me', session)).json());
+  try {
+    assert.deepEqual((await me()).providers, [{ id: 'github', label: 'GitHub' }], 'only configured providers are offered');
+
+    const first = await signInWith('octo');
+    assert.equal(first.location, '/#/c/x', 'back to where you were going');
+    const octo = await me(first.session);
+    assert.equal(octo.user.username, 'octo-cat', 'a new account named after the GitHub login');
+    assert.deepEqual([octo.user.hasPassword, octo.identities[0].provider, octo.identities[0].login], [false, 'github', 'octo cat']);
+    assert.equal((await me((await signInWith('octo')).session)).user.id, octo.user.id, 'the same GitHub user gets the same account');
+
+    assert.match((await signInWith('octo', { state: 'forged' })).location, /^\/#\/login\?error=.*expired/, 'a state that was not issued here is refused');
+    assert.match((await signInWith('bad')).location, /^\/#\/login\?error=GitHub%20refused/);
+    assert.equal((await signInWith('octo', { next: '//evil.example' })).location, '/#/', 'next is a path in the app');
+
+    // a password account links its GitHub, then signs in with it
+    const ann = store.createUser({ username: 'gh-ann', password: 'secret1' });
+    const annSession = `ea_sid=${store.createLogin(ann.id)}`;
+    assert.equal((await signInWith('ann', { session: annSession, link: true })).location, '/#/account?linked=github');
+    assert.equal((await me((await signInWith('ann')).session)).user.id, ann.id);
+    assert.match((await signInWith('octo', { session: annSession, link: true })).location, /^\/#\/account\?error=.*already%20linked%20to%20another/, "someone else's GitHub can't be linked");
+
+    // unlinking keeps at least one way in; a GitHub-only account sets a password first
+    const call = (method, url, session, body) => fetch(base + url, { method, headers: { cookie: session, 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
+    assert.equal((await call('DELETE', '/api/auth/identities/github', first.session)).status, 400);
+    assert.equal((await call('POST', '/api/auth/password', first.session, { password: 'newpass1' })).status, 200, 'no current password to give');
+    assert.equal((await call('DELETE', '/api/auth/identities/github', first.session)).status, 200);
+    assert.equal(store.verifyUser('octo-cat', 'newpass1')?.id, octo.user.id);
+    assert.notEqual((await me((await signInWith('octo')).session)).user.id, octo.user.id, 'once unlinked, that GitHub user gets a fresh account');
+
+    delete process.env.GITHUB_CLIENT_ID;
+    assert.match((await get('/api/auth/oauth/github/start')).headers.get('location'), /error=.*not%20set%20up/);
+  } finally {
+    delete process.env.GITHUB_CLIENT_ID;
+    delete process.env.GITHUB_CLIENT_SECRET;
+    server.close();
+    fake.close();
+  }
+});

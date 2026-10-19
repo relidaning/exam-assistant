@@ -15,7 +15,7 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) document.add
 document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 document.addEventListener('click', (e) => {
-  if (e.target.closest('[data-act="account"]')) { accountMenu(); return; }
+  if (e.target.closest('[data-act="account"]')) { navigate('#/account'); return; }
   const b = e.target.closest('[data-setting]');
   if (b) {
     const s = b.dataset.setting;
@@ -40,6 +40,7 @@ document.addEventListener('click', (e) => {
 // ---------- router ----------
 const routes = [
   [/^\/login$/, loginPage],
+  [/^\/account$/, accountPage],
   [/^\/?$/, home],
   [/^\/import$/, importPage],
   [/^\/c\/([^/]+)$/, coursePage],
@@ -89,10 +90,19 @@ async function route() {
 }
 
 // ---------- accounts ----------
+// brand marks for the sign-in buttons (each provider's own colours)
+const PROVIDER_ICONS = {
+  google: '<svg viewBox="0 0 48 48" width="18" height="18" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-7.9l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>',
+  github: '<svg viewBox="0 0 16 16" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>',
+};
+const providerHref = (id, { next = '/', link = false } = {}) => `/api/auth/oauth/${id}/start?next=${enc(next)}${link ? '&link=1' : ''}`;
+
 async function loginPage(params) {
   const next = params?.get?.('next') || '/';
   if (auth.user) { navigate(`#${next}`); return; }
   let mode = auth.firstUser ? 'register' : 'login';
+  const error = params?.get?.('error') || '';
+  const providers = auth.providers || [];
   const draw = () => {
     app.innerHTML = `${topbar()}
       <div class="page login-page">
@@ -101,10 +111,12 @@ async function loginPage(params) {
           <h1>${mode === 'login' ? 'Sign in' : 'Create your account'}</h1>
           ${auth.firstUser ? `<p class="muted small">You're the first one here. This account becomes the admin and takes over the existing courses and progress.</p>`
             : `<p class="muted small">${mode === 'login' ? 'Your progress is private to your account.' : 'Practise public courses, make your own, and publish them for others.'}</p>`}
-          <label class="field"><span>Username</span><input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus></label>
+          ${providers.length ? `<div class="oauth-buttons">${providers.map((p) => `<a class="btn oauth-btn" href="${providerHref(p.id, { next })}">${PROVIDER_ICONS[p.id] || ''}Continue with ${esc(p.label)}</a>`).join('')}</div>
+          <div class="or-line" role="separator"><span>or with a username</span></div>` : ''}
+          <label class="field"><span>Username</span><input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" ${providers.length ? '' : 'autofocus'}></label>
           <label class="field"><span>Password</span><input name="password" type="password" required minlength="${mode === 'login' ? 1 : 6}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
           ${mode === 'register' ? '<p class="hint">At least 6 characters.</p>' : ''}
-          <p class="error-text small login-error" role="alert"></p>
+          <p class="error-text small login-error" role="alert">${esc(error)}</p>
           <button class="btn primary big" type="submit">${mode === 'login' ? 'Sign in' : 'Create account'}</button>
           ${auth.firstUser ? '' : `<p class="muted small login-switch">${mode === 'login' ? 'New here?' : 'Have an account?'} <button type="button" class="link-btn" data-act="switch">${mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>`}
         </form>
@@ -126,29 +138,58 @@ async function loginPage(params) {
   draw();
 }
 
-async function accountMenu() {
+/** Your account: who you are, how you sign in (password, linked Google/GitHub), sign out. */
+async function accountPage(params) {
+  const seq = routeSeq;
+  Object.assign(auth, await api('GET', '/api/auth/me'));
+  if (seq !== routeSeq) return;
   const u = auth.user;
-  if (!u) return;
-  const choice = await dialog({
-    title: u.username,
-    body: `<p class="muted">${u.isAdmin ? 'Admin. You can also unpublish or delete any public course.' : 'Signed in.'} Your answers, stars, notes and exam results are visible only to you.</p>`,
-    buttons: [{ label: 'Close', value: null }, { label: 'Change password', value: 'password' }, { label: 'Sign out', value: 'logout', primary: true }],
-  });
-  if (choice === 'logout') {
+  const linked = Object.fromEntries((auth.identities || []).map((x) => [x.provider, x]));
+  const label = { google: 'Google', github: 'GitHub' };
+  const shown = [...new Set([...(auth.providers || []).map((p) => p.id), ...Object.keys(linked)])];
+  const signIns = (u.hasPassword ? 1 : 0) + Object.keys(linked).length;
+  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › Account`)}
+    <div class="page narrow">
+      <h1>${esc(u.username)}</h1>
+      <p class="muted">${u.isAdmin ? 'Admin: you can also unpublish or delete any public course. ' : ''}Your answers, stars, notes and exam results are visible only to you.</p>
+      <section class="card">
+        <h3>Sign-in methods</h3>
+        <ul class="signin-list">
+          <li><span class="signin-ico" aria-hidden="true">🔑</span><span class="grow"><b>Password</b><small class="muted">${u.hasPassword ? `Sign in as “${esc(u.username)}”` : 'Not set'}</small></span>
+            <button class="btn small ghost" data-act="password">${u.hasPassword ? 'Change' : 'Set password'}</button></li>
+          ${shown.map((id) => `<li><span class="signin-ico" aria-hidden="true">${PROVIDER_ICONS[id] || ''}</span>
+            <span class="grow"><b>${label[id] || esc(id)}</b><small class="muted">${linked[id] ? `Linked${linked[id].login || linked[id].email ? `: ${esc(linked[id].login || linked[id].email)}` : ''}` : 'Not linked'}</small></span>
+            ${linked[id]
+              ? `<button class="btn small ghost" data-unlink="${id}" ${signIns < 2 ? 'disabled title="It is your only way to sign in"' : ''}>Unlink</button>`
+              : (auth.providers || []).some((p) => p.id === id) ? `<a class="btn small primary" href="${providerHref(id, { link: true })}">Link</a>` : ''}</li>`).join('')}
+        </ul>
+        ${shown.length ? '<p class="hint">Linking lets you sign in with that account too. Progress stays on this account.</p>' : '<p class="hint">Google and GitHub sign-in are not set up on this server.</p>'}
+      </section>
+      <section class="card"><h3>Sign out</h3><p class="muted">On this device. Your progress stays on the server.</p><button class="btn" data-act="logout">Sign out</button></section>
+    </div>`;
+  const note = params?.get?.('error') || (params?.get?.('linked') && `${label[params.get('linked')] || 'Account'} linked`);
+  if (note) { toast(note, params.get('error') ? 'error' : 'ok', 4000); history.replaceState(history.state, '', '#/account'); }
+  $('[data-act="logout"]', app).addEventListener('click', async () => {
     await api('POST', '/api/auth/logout').catch(() => {});
     location.hash = '#/login';
     location.reload(); // drop every cached course and round of this user
-  } else if (choice === 'password') {
+  });
+  $$('[data-unlink]', app).forEach((b) => b.addEventListener('click', async () => {
+    const id = b.dataset.unlink;
+    if (!(await confirmDialog(`Unlink ${label[id]}?`, `You won't be able to sign in with ${label[id]} any more.`, 'Unlink', true))) return;
+    try { await api('DELETE', `/api/auth/identities/${id}`); toast(`${label[id]} unlinked`); accountPage(); } catch (e) { toast(e.message, 'error'); }
+  }));
+  $('[data-act="password"]', app).addEventListener('click', async () => {
     const { value, form } = await dialog({
-      title: 'Change password',
-      body: `<label class="field"><span>Current password</span><input name="current" type="password" required autocomplete="current-password"></label>
+      title: u.hasPassword ? 'Change password' : 'Set a password',
+      body: `${u.hasPassword ? '<label class="field"><span>Current password</span><input name="current" type="password" required autocomplete="current-password"></label>' : `<p class="muted small">Then you can also sign in as “${esc(u.username)}” with it.</p>`}
         <label class="field"><span>New password</span><input name="password" type="password" required minlength="6" autocomplete="new-password"></label>`,
-      buttons: [{ label: 'Cancel', value: null }, { label: 'Change', value: 'ok', primary: true }],
+      buttons: [{ label: 'Cancel', value: null }, { label: 'Save', value: 'ok', primary: true }],
       withForm: true,
     });
     if (value !== 'ok') return;
-    try { await api('POST', '/api/auth/password', form); toast('Password changed', 'ok'); } catch (e) { toast(e.message, 'error'); }
-  }
+    try { await api('POST', '/api/auth/password', form); toast('Password saved', 'ok'); accountPage(); } catch (e) { toast(e.message, 'error'); }
+  });
 }
 
 // ---------- home: course cards ----------

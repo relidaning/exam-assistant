@@ -8,6 +8,8 @@ import * as store from './lib/store.mjs';
 import { detectFormat, parsePayload, localizeMedia, mediaDirsFor, findInSourceFile } from './lib/importer.mjs';
 import { normalizeAll, normalizeQuestion } from './lib/normalize.mjs';
 import { toMarkdown } from './lib/tomd.mjs';
+import * as oauth from './lib/oauth.mjs';
+import crypto from 'node:crypto';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 8710);
@@ -100,13 +102,14 @@ function preparseImport(body, courseId) {
 // ---------- accounts: a cookie holds the sign-in token ----------
 const COOKIE = 'ea_sid';
 
-function cookieToken(req) {
+function cookie(req, name) {
   for (const part of String(req.headers.cookie || '').split(';')) {
     const [k, ...v] = part.trim().split('=');
-    if (k === COOKIE) return decodeURIComponent(v.join('='));
+    if (k === name) { try { return decodeURIComponent(v.join('=')); } catch { return null; } }
   }
   return null;
 }
+const cookieToken = (req) => cookie(req, COOKIE);
 
 function setLoginCookie(res, token) {
   // no Secure flag: the app is served over plain http on the LAN
@@ -131,8 +134,70 @@ const originHost = (origin) => { try { return new URL(origin).host; } catch { re
 
 const signIn = (res, user) => { setLoginCookie(res, store.createLogin(user.id)); return { user }; };
 
+function redirect(res, location, headers = {}) {
+  res.writeHead(302, { location, 'cache-control': 'no-store', ...headers });
+  res.end();
+}
+
+// ---------- Google / GitHub: start → provider → callback ----------
+// The state (with where to go afterwards, and whether this links to the signed-in account) rides in a short-lived
+// cookie on this address; the callback must bring the same state back.
+const OAUTH_COOKIE = 'ea_oauth';
+const safeNext = (n) => (/^\/[^\s\\]*$/.test(String(n || '')) && !String(n).startsWith('//') ? String(n) : '/');
+const baseUrl = (req, provider) => oauth.config()[provider]?.publicUrl || `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host}`;
+const callbackUrl = (req, provider) => `${baseUrl(req, provider)}/api/auth/oauth/${provider}/callback`;
+const loginError = (res, msg) => redirect(res, `/#/login?error=${encodeURIComponent(msg)}`, { 'set-cookie': `${OAUTH_COOKIE}=; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=0` });
+
+function oauthStart(req, res, user, provider) {
+  const url = new URL(req.url, 'http://x');
+  if (!oauth.config()[provider]) return loginError(res, 'That sign-in method is not set up');
+  // the providers only know one address: go there first, so the cookies live where the callback lands
+  const pub = oauth.config()[provider].publicUrl;
+  if (pub && new URL(pub).host !== req.headers.host) return redirect(res, `${pub}${url.pathname}${url.search}`);
+  const link = url.searchParams.get('link') === '1';
+  const next = safeNext(url.searchParams.get('next'));
+  if (link && !user) return loginError(res, 'Sign in first, then link the account');
+  const state = crypto.randomBytes(24).toString('base64url');
+  const data = Buffer.from(JSON.stringify({ state, provider, next, link })).toString('base64url');
+  redirect(res, oauth.authorizeUrl(provider, { redirectUri: callbackUrl(req, provider), state }), {
+    'set-cookie': `${OAUTH_COOKIE}=${data}; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=600`,
+  });
+}
+
+async function oauthCallback(req, res, user, provider) {
+  const q = new URL(req.url, 'http://x').searchParams;
+  let saved = null;
+  try { saved = JSON.parse(Buffer.from(cookie(req, OAUTH_COOKIE) || '', 'base64url').toString()); } catch { /* none */ }
+  const clear = `${OAUTH_COOKIE}=; Path=/api/auth/oauth; HttpOnly; SameSite=Lax; Max-Age=0`;
+  const fail = (msg) => (saved?.link ? redirect(res, `/#/account?error=${encodeURIComponent(msg)}`, { 'set-cookie': clear }) : loginError(res, msg));
+  const label = oauth.PROVIDERS[provider]?.label || provider;
+  if (!saved || saved.provider !== provider || !q.get('state') || q.get('state') !== saved.state) return fail('The sign-in expired or came from somewhere else. Try again');
+  if (q.get('error')) return fail(q.get('error') === 'access_denied' ? `${label} sign-in was cancelled` : `${label}: ${q.get('error_description') || q.get('error')}`);
+  if (!oauth.config()[provider]) return fail('That sign-in method is not set up');
+  let profile;
+  try { profile = await oauth.fetchProfile(provider, { code: q.get('code') || '', redirectUri: callbackUrl(req, provider) }); } catch (e) { return fail(e.message); }
+  if (saved.link) {
+    if (!user) return loginError(res, 'Sign in first, then link the account');
+    try { store.linkIdentity(user.id, provider, profile); } catch (e) { return fail(e.message); }
+    return redirect(res, `/#/account?linked=${provider}`, { 'set-cookie': clear });
+  }
+  const who = store.userForIdentity(provider, profile.subject) || store.createIdentityUser(provider, profile);
+  store.linkIdentity(who.id, provider, profile); // refresh the stored email/login
+  redirect(res, `/#${saved.next}`, { 'set-cookie': [clear, `${COOKIE}=${encodeURIComponent(store.createLogin(who.id))}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${store.LOGIN_DAYS * 86400}`] });
+}
+
 const authRoutes = [
-  ['GET', /^\/api\/auth\/me$/, (req, res, user) => ({ user, firstUser: !user && store.userCount() === 0 })],
+  ['GET', /^\/api\/auth\/me$/, (req, res, user) => ({
+    user, firstUser: !user && store.userCount() === 0, providers: oauth.enabledProviders(),
+    ...(user ? { identities: store.identitiesOf(user.id) } : {}),
+  })],
+  ['GET', /^\/api\/auth\/oauth\/(google|github)\/start$/, (req, res, user) => oauthStart(req, res, user, /\/oauth\/(\w+)\//.exec(req.url)[1])],
+  ['GET', /^\/api\/auth\/oauth\/(google|github)\/callback$/, (req, res, user) => oauthCallback(req, res, user, /\/oauth\/(\w+)\//.exec(req.url)[1])],
+  ['DELETE', /^\/api\/auth\/identities\/(google|github)$/, (req, res, user) => {
+    if (!user) throw store.httpError(401, 'Sign in first');
+    store.unlinkIdentity(user.id, req.url.split('/').pop().split('?')[0]);
+    return { ok: true, identities: store.identitiesOf(user.id) };
+  }],
   ['POST', /^\/api\/auth\/register$/, async (req, res) => {
     const body = await readBody(req);
     return signIn(res, store.createUser({ username: body.username, password: body.password }));
@@ -273,7 +338,10 @@ export function createServer() {
         if (req.method !== 'GET' && req.headers.origin && originHost(req.headers.origin) !== req.headers.host) return send(res, 403, { error: 'Cross-origin request refused' });
         const user = store.userForToken(cookieToken(req));
         for (const [method, re, handler] of authRoutes) {
-          if (method === req.method && re.test(pathname)) return send(res, 200, await handler(req, res, user));
+          if (method === req.method && re.test(pathname)) {
+            const out = await handler(req, res, user);
+            return res.headersSent ? undefined : send(res, 200, out); // redirects answer by themselves
+          }
         }
         if (!user) return send(res, 401, { error: 'Sign in first' });
         for (const [method, re, handler] of routes) {

@@ -30,7 +30,10 @@ Format reference: `docs/FORMAT.md`. Never write to `data/exam.db` by hand — go
 
 - `server.mjs` — HTTP API (`/api/auth/…`, `/api/courses…`, `/api/import/preview`) + static files + `/media/` (range
   requests). Every API route but `/api/auth/*` needs the `ea_sid` cookie; routes check view / edit (owner) / manage
-  (owner, or admin on public courses) through `store.courseAccess`. Writes from another Origin are refused
+  (owner, or admin on public courses) through `store.courseAccess`. Writes from another Origin are refused.
+  Google/GitHub sign-in: `lib/oauth.mjs` (config from env or `data/oauth.json`; `PROVIDERS` endpoints, which tests
+  point at a fake), state in the short-lived `ea_oauth` cookie, accounts in the `identities` table (matched by the
+  provider's user id only; linking happens from `#/account` while signed in)
 - `lib/normalize.mjs` — loose input → canonical question schema; type aliases & inference; stable ids
 - `lib/parse-md.mjs` — Markdown/Obsidian/pasted-paper parser (EN + 中文 keywords)
 - `lib/importer.mjs` — payload detection, media localization (copies embeds into `data/media/<course>/`)
