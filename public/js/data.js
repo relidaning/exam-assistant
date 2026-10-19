@@ -1,5 +1,5 @@
 // Client-side cache of course data ({course, progress, stats, masteryStreak}) + progress mutations.
-import { api, storage, toast } from './ui.js';
+import { api, storage, toast, auth } from './ui.js';
 
 const cache = new Map();
 
@@ -49,7 +49,8 @@ export async function recordExam(id, exam) {
 // Reads are synchronous from `live` (filled whenever the course loads); saves go to the server shortly after.
 // localStorage only holds rounds from before (or saves that could not reach the server); they move up on the next load.
 export const SLOTS = ['practice', 'mistakes', 'exam', 'starred', 'drill'];
-const key = (courseId, slot) => `exam.session.${courseId}.${slot}`;
+// per user, so a round kept on a shared device never shows up for someone else
+const key = (courseId, slot) => `exam.session.${auth.user?.id ?? 0}.${courseId}.${slot}`;
 const live = new Map(); // courseId → { slot: session }
 const pending = new Map(); // `${courseId}\n${slot}` → { timer, courseId, slot }
 const queues = new Map(); // courseId → promise chain, so a round's saves and deletes reach the server in order
@@ -124,6 +125,12 @@ function adoptSessions(courseId, server) {
     legacy.slot = SLOTS.includes(legacy.module) ? legacy.module : 'drill';
     if (!storage.get(key(courseId, legacy.slot))) storage.set(key(courseId, legacy.slot), legacy);
     storage.del(`exam.session.${courseId}`);
+  }
+  for (const slot of SLOTS) { // before accounts: rounds were kept per browser, not per user
+    const old = storage.get(`exam.session.${courseId}.${slot}`);
+    if (!old) continue;
+    if (!storage.get(key(courseId, slot))) storage.set(key(courseId, slot), old);
+    storage.del(`exam.session.${courseId}.${slot}`);
   }
   const moved = [];
   for (const slot of SLOTS) {

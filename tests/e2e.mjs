@@ -17,8 +17,14 @@ const { createServer } = await import('../server.mjs');
 const server = createServer();
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;
-const bank = Object.fromEntries((await (await fetch(`${base}/api/courses/demo`)).json()).course.questions.map((q) => [q.id, q]));
-const putSettings = (s) => fetch(`${base}/api/courses/demo/settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(s) });
+const otherBase = base.replace('127.0.0.1', 'localhost');
+// the first account takes over the imported demo course; the browser pages get its sign-in cookie
+const reg = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'tester', password: 'secret1' }) });
+const token = reg.headers.get('set-cookie').match(/ea_sid=([^;]+)/)[1];
+const authed = (url, opts = {}) => fetch(url, { ...opts, headers: { ...opts.headers, cookie: `ea_sid=${token}` } });
+await authed(`${base}/api/courses/demo`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ visibility: 'public' }) });
+const bank = Object.fromEntries((await (await authed(`${base}/api/courses/demo`)).json()).course.questions.map((q) => [q.id, q]));
+const putSettings = (s) => authed(`${base}/api/courses/demo/settings`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(s) });
 
 // prefer an installed Chrome so no browser download is needed
 const browser = await chromium.launch(fs.existsSync('/usr/bin/google-chrome') && !process.env.PW_BUNDLED ? { executablePath: '/usr/bin/google-chrome' } : {});
@@ -27,8 +33,9 @@ let failures = 0;
 const check = (cond, msg) => { if (!cond) { failures++; console.log(`  ✗ ${msg}`); } else console.log(`  ✓ ${msg}`); };
 const LET = 'ABCDEFGHIJKL';
 
-async function newPage(viewport, opts = {}) {
+async function newPage(viewport, { signedOut, ...opts } = {}) {
   const ctx = await browser.newContext({ viewport, ...opts });
+  if (!signedOut) await ctx.addCookies([base, otherBase].map((url) => ({ name: 'ea_sid', value: token, url })));
   const page = await ctx.newPage();
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message} @ ${(e.stack || '').split('\n').slice(1, 4).join(' | ')}`));
   page.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(`console: ${m.text()}`); });
@@ -48,7 +55,7 @@ async function currentQuestion(page) {
     return s.qids[s.idx];
   });
   if (!bank[qid]) { // re-parsed questions get new ids: refresh the local copy of the bank
-    for (const q of (await (await fetch(`${base}/api/courses/demo`)).json()).course.questions) bank[q.id] = q;
+    for (const q of (await (await authed(`${base}/api/courses/demo`)).json()).course.questions) bank[q.id] = q;
   }
   return bank[qid];
 }
@@ -163,7 +170,7 @@ try {
   console.log('re-parse');
   await page.goto(`${base}/#/c/demo`);
   await page.waitForSelector('[data-start="practice"]');
-  const savedSettings = (await (await fetch(`${base}/api/courses/demo`)).json()).progress.settings;
+  const savedSettings = (await (await authed(`${base}/api/courses/demo`)).json()).progress.settings;
   await putSettings({ ...savedSettings, practice: { types: ['single'] } });
   await page.reload();
   await page.click('[data-start="practice"]');
@@ -189,7 +196,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.qcard .stem')?.textContent.includes('(edited)'));
   const after = await currentQuestion(page);
   check(after === undefined || after.id !== before.id, 'question saved with a new id (the bank fixture is not refreshed)');
-  const live = (await (await fetch(`${base}/api/courses/demo`)).json()).course.questions;
+  const live = (await (await authed(`${base}/api/courses/demo`)).json()).course.questions;
   check(live.length === 16 && live.some((q) => q.stem.includes('(edited)')) && !live.some((q) => q.id === before.id), 're-parsed question replaced in place');
   await putSettings(savedSettings);
 
@@ -306,8 +313,8 @@ try {
   console.log('past papers');
   const paper = (src, n) => Array.from({ length: n }, (_, i) => ({ stem: `${src} question ${i + 1}?`, options: ['yes', 'no'], answer: 'A', tags: ['past-paper'], source: src }));
   const [oldP, newP] = ['15040 2024年4月真题', '15040 2025年4月真题']; // imported oldest first
-  await fetch(`${base}/api/courses/demo/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: JSON.stringify([...paper(oldP, 3), ...paper(newP, 2)]) }) });
-  const st0 = (await (await fetch(`${base}/api/courses/demo`)).json()).progress.settings;
+  await authed(`${base}/api/courses/demo/import`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: JSON.stringify([...paper(oldP, 3), ...paper(newP, 2)]) }) });
+  const st0 = (await (await authed(`${base}/api/courses/demo`)).json()).progress.settings;
   await putSettings({ ...st0, exam: { perType: { single: 2 }, points: { single: 2 }, timeMin: 30, tag: 'past-paper' } });
   await page.goto(`${base}/#/c/demo`);
   await page.waitForSelector('.mtile');
@@ -322,7 +329,7 @@ try {
   check((await page.textContent('.run-count')).endsWith('/ 3') && (await page.textContent('.run-module')).includes(oldP), 'chosen paper is sat as set (3 questions, named after the paper)');
   check((await page.textContent('.stem')).includes(`${oldP} question 1`), 'questions keep the paper\'s order');
   await clearRound(page, 'exam');
-  await fetch(`${base}/api/courses/demo/exam`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: newP, total: 2, score: 2, maxScore: 4, correct: 1, durationSec: 95, byType: {} }) });
+  await authed(`${base}/api/courses/demo/exam`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: newP, total: 2, score: 2, maxScore: 4, correct: 1, durationSec: 95, byType: {} }) });
   await page.goto(`${base}/#/c/demo`);
   await page.waitForSelector('.mtile');
   await page.click('[data-start="exam"]');
@@ -402,7 +409,6 @@ try {
   const firstHere = await currentQuestion(page);
   await page.evaluate(async () => (await import('/js/data.js')).flushSessions('demo'));
   const other = await newPage({ width: 1000, height: 700 });
-  const otherBase = base.replace('127.0.0.1', 'localhost');
   await other.goto(`${otherBase}/#/c/demo`);
   await other.waitForSelector('.mtile.resumable[data-mod="practice"], [data-mod="practice"].resumable');
   check(true, 'the other address shows the practice round as unfinished');
@@ -420,6 +426,46 @@ try {
   check((await page.textContent('.run-count')).startsWith('3'), 'and the first address picks up where the other left off');
   await other.close();
   await clearRound(page, 'practice');
+
+  // ---------- accounts: a second user signs up in the browser ----------
+  console.log('accounts');
+  const visitor = await newPage({ width: 1280, height: 860 }, { signedOut: true });
+  await visitor.goto(`${base}/#/c/demo`);
+  await visitor.waitForSelector('.login-card');
+  check(visitor.url().includes('#/login?next='), 'signed out: the app asks you to sign in');
+  await visitor.screenshot({ path: `${shots}/40-login.png` });
+  await visitor.click('[data-act="switch"]');
+  await visitor.fill('input[name="username"]', 'visitor');
+  await visitor.fill('input[name="password"]', 'secret1');
+  await visitor.click('button[type="submit"]');
+  await visitor.waitForSelector('.mtile');
+  check(true, 'after signing up you land on the page you asked for');
+  check(await visitor.$('[data-act="fork"]') && !(await visitor.$('[data-act="visibility"]')), "someone else's public course offers Fork, not Publish");
+  check((await visitor.textContent('.course-meta')).includes('by tester'), 'and names its owner');
+  check(!(await visitor.$('.mtile.resumable')), "the owner's unfinished rounds are not shown to others");
+  await visitor.goto(`${base}/#/`);
+  await visitor.waitForSelector('.public-tiles .course-tile');
+  check((await visitor.textContent('.public-tiles')).includes('Demo'), 'the public course is listed under Public courses');
+  await visitor.screenshot({ path: `${shots}/41-public-courses.png` });
+  await visitor.goto(`${base}/#/c/demo/settings`);
+  await visitor.waitForSelector('form.settings');
+  check(!(await visitor.$('form.course-form')) && !(await visitor.$('.danger-zone')) && !(await visitor.$('.import-text')), "no editing, importing or deleting someone else's course");
+  await visitor.goto(`${base}/#/c/demo`);
+  await visitor.waitForSelector('.mtile');
+  await visitor.click('[data-start="practice"]');
+  await visitor.waitForSelector('.qcard');
+  check(!(await visitor.$('[data-act="reparse"]')) && await visitor.$('[data-act="star"]'), 'no Re-parse on a course you do not own, Star still there');
+  await visitor.goto(`${base}/#/c/demo`);
+  await visitor.waitForSelector('[data-act="fork"]');
+  await visitor.click('[data-act="fork"]');
+  await visitor.waitForSelector('dialog input[name="name"]');
+  await visitor.click('dialog .btn.primary');
+  await visitor.waitForFunction(() => /#\/c\/demo-visitor$/.test(location.hash) && document.querySelector('[data-act="visibility"]'));
+  check((await visitor.textContent('.course-meta')).includes('forked from'), 'forking opens your own private copy, linked to the original');
+  await visitor.screenshot({ path: `${shots}/42-fork.png` });
+  const ownerList = await (await authed(`${base}/api/courses`)).json();
+  check(!ownerList.some((c) => c.id === 'demo-visitor'), 'the fork stays private to its owner');
+  await visitor.close();
 
   // ---------- phone ----------
   console.log('phone');

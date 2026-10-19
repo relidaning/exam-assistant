@@ -14,13 +14,16 @@ URL (`http://localhost:8710`, or the LAN address printed by `npm start` for a ph
 ## Common steps
 
 1. Pick the course name exactly as the user says it. `--course` creates it when missing (id = slug of the name).
+   The app has accounts: a new course belongs to the admin (the user's account), or to `--owner <username>`,
+   and starts **private**. Add `--public` when the user wants others to see it (they can also publish it from the
+   course page). Importing into an existing course keeps its owner and visibility.
 2. Write the questions to a file in the session scratchpad (never into `data/` by hand): Markdown for
    human-readable papers, JSON when you are generating structured data.
 3. `node scripts/import.mjs --course "<name>" --source "<where from>" --dry-run --json <file>`
    — check every question has the right `type` and `answer`. Fix the file, repeat until 0 errors.
 4. `node scripts/import.mjs --course "<name>" --source "<where from>" <file>` (add `--chapter`, `--tags`).
    Re-importing the same question updates it in place (stable ids), so it's safe to re-run.
-5. Server running? `curl -s localhost:8710/api/courses` — if not, start it in the background with `npm start`.
+5. Server running? `curl -s localhost:8710/api/auth/me` — if not, start it detached (`nohup setsid npm start …`).
 
 Question quality rules:
 - Keep the original language of the paper. Keep math in `$…$` LaTeX.
@@ -66,6 +69,7 @@ writing back to the vault.
 
 ## Checking the result
 
-- `curl -s localhost:8710/api/courses | node -e 'for (const c of JSON.parse(require("fs").readFileSync(0))) console.log(c.id, c.stats.total, c.stats.byType)'`
-- Open `http://localhost:8710/#/c/<id>/manage` to browse questions with answers.
+- The API needs a sign-in, so check through the store instead:
+  `node -e 'import("./lib/store.mjs").then((s) => { for (const c of s.listCourses(s.defaultOwner()?.id ?? 0)) console.log(c.id, c.visibility, c.stats.total, c.stats.byType) })'`
+- Open `http://localhost:8710/#/c/<id>/settings` to see the course.
 - `npm test` must still pass if you touched code.

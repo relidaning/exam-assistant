@@ -343,12 +343,12 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     navigate(page('result'));
   }
 
-  /** Star and re-parse, under the question card (re-parse is hidden during a mock exam: no peeking at the source). */
+  /** Star and re-parse, under the question card (re-parse is hidden during a mock exam, no peeking at the source, and for courses you don't own). */
   function questionTools(p, mode) {
     const bar = document.createElement('div');
     bar.className = 'q-tools';
     bar.innerHTML = `<button type="button" class="btn ghost ${p?.starred ? 'on' : ''}" data-act="star" aria-pressed="${!!p?.starred}">${p?.starred ? '★ Starred' : '☆ Star'}<kbd class="key-hint">S</kbd></button>
-      ${mode === 'exam' ? '' : `<button type="button" class="btn ghost" data-act="reparse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg>Re-parse<kbd class="key-hint">P</kbd></button>`}`;
+      ${mode === 'exam' || !data.course.access?.canEdit ? '' : `<button type="button" class="btn ghost" data-act="reparse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg>Re-parse<kbd class="key-hint">P</kbd></button>`}`;
     return bar;
   }
 

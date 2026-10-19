@@ -1,5 +1,5 @@
 // Router + pages. Flow: course cards → course hub (module panels) → run → result; Settings decide what modules ask.
-import { $, $$, esc, api, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, themeIcon } from './ui.js';
+import { $, $$, esc, api, auth, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, themeIcon } from './ui.js';
 import { md, mdInline } from './render.js';
 import { TYPES, TYPE_LABELS, answerText, isOpen } from './grade.js';
 import { loadCourse, peekCourse, invalidate, sessions } from './data.js';
@@ -15,6 +15,7 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) document.add
 document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-act="account"]')) { accountMenu(); return; }
   const b = e.target.closest('[data-setting]');
   if (b) {
     const s = b.dataset.setting;
@@ -38,6 +39,7 @@ document.addEventListener('click', (e) => {
 
 // ---------- router ----------
 const routes = [
+  [/^\/login$/, loginPage],
   [/^\/?$/, home],
   [/^\/import$/, importPage],
   [/^\/c\/([^/]+)$/, coursePage],
@@ -60,6 +62,16 @@ async function route() {
   teardownRun();
   const hash = location.hash.replace(/^#/, '') || '/';
   const [pathPart, query = ''] = hash.split('?');
+  if (auth.user === undefined) {
+    const seq = routeSeq;
+    try { Object.assign(auth, await api('GET', '/api/auth/me')); } catch (e) {
+      app.innerHTML = `<div class="page narrow"><div class="card empty"><h2>Can't reach the server</h2><p>${esc(e.message)}</p><button class="btn primary" onclick="location.reload()">Try again</button></div></div>`;
+      auth.user = undefined;
+      return;
+    }
+    if (seq !== routeSeq) return;
+  }
+  if (!auth.user && pathPart !== '/login') { navigate(`#/login?next=${enc(hash)}`); return; }
   for (const [re, fn] of routes) {
     const m = re.exec(pathPart);
     if (!m) continue;
@@ -74,6 +86,69 @@ async function route() {
     return;
   }
   navigate('#/');
+}
+
+// ---------- accounts ----------
+async function loginPage(params) {
+  const next = params?.get?.('next') || '/';
+  if (auth.user) { navigate(`#${next}`); return; }
+  let mode = auth.firstUser ? 'register' : 'login';
+  const draw = () => {
+    app.innerHTML = `${topbar()}
+      <div class="page login-page">
+        <form class="card login-card" autocomplete="on">
+          <span class="logo big" aria-hidden="true">✎</span>
+          <h1>${mode === 'login' ? 'Sign in' : 'Create your account'}</h1>
+          ${auth.firstUser ? `<p class="muted small">You're the first one here. This account becomes the admin and takes over the existing courses and progress.</p>`
+            : `<p class="muted small">${mode === 'login' ? 'Your progress is private to your account.' : 'Practise public courses, make your own, and publish them for others.'}</p>`}
+          <label class="field"><span>Username</span><input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" autofocus></label>
+          <label class="field"><span>Password</span><input name="password" type="password" required minlength="${mode === 'login' ? 1 : 6}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
+          ${mode === 'register' ? '<p class="hint">At least 6 characters.</p>' : ''}
+          <p class="error-text small login-error" role="alert"></p>
+          <button class="btn primary big" type="submit">${mode === 'login' ? 'Sign in' : 'Create account'}</button>
+          ${auth.firstUser ? '' : `<p class="muted small login-switch">${mode === 'login' ? 'New here?' : 'Have an account?'} <button type="button" class="link-btn" data-act="switch">${mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>`}
+        </form>
+      </div>`;
+    $('[data-act="switch"]', app)?.addEventListener('click', () => { mode = mode === 'login' ? 'register' : 'login'; draw(); });
+    $('form', app).addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = Object.fromEntries(new FormData(e.target));
+      try {
+        const r = await api('POST', `/api/auth/${mode}`, body);
+        auth.user = r.user;
+        auth.firstUser = false;
+        invalidate();
+        coursesCache = null;
+        navigate(`#${next === '/login' ? '/' : next}`);
+      } catch (err) { $('.login-error', app).textContent = err.message; }
+    });
+  };
+  draw();
+}
+
+async function accountMenu() {
+  const u = auth.user;
+  if (!u) return;
+  const choice = await dialog({
+    title: u.username,
+    body: `<p class="muted">${u.isAdmin ? 'Admin. You can also unpublish or delete any public course.' : 'Signed in.'} Your answers, stars, notes and exam results are visible only to you.</p>`,
+    buttons: [{ label: 'Close', value: null }, { label: 'Change password', value: 'password' }, { label: 'Sign out', value: 'logout', primary: true }],
+  });
+  if (choice === 'logout') {
+    await api('POST', '/api/auth/logout').catch(() => {});
+    location.hash = '#/login';
+    location.reload(); // drop every cached course and round of this user
+  } else if (choice === 'password') {
+    const { value, form } = await dialog({
+      title: 'Change password',
+      body: `<label class="field"><span>Current password</span><input name="current" type="password" required autocomplete="current-password"></label>
+        <label class="field"><span>New password</span><input name="password" type="password" required minlength="6" autocomplete="new-password"></label>`,
+      buttons: [{ label: 'Cancel', value: null }, { label: 'Change', value: 'ok', primary: true }],
+      withForm: true,
+    });
+    if (value !== 'ok') return;
+    try { await api('POST', '/api/auth/password', form); toast('Password changed', 'ok'); } catch (e) { toast(e.message, 'error'); }
+  }
 }
 
 // ---------- home: course cards ----------
@@ -135,24 +210,38 @@ async function home() {
   coursesCache = courses;
 }
 
+const GLOBE = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
+const LOCK = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+
+/** Who a course belongs to and whether others see it, in one short line. */
+function courseOwnerLine(c) {
+  if (c.mine ?? c.access?.isOwner) return c.visibility === 'public' ? `${GLOBE}Public` : `${LOCK}Private`;
+  return c.owner ? `by ${esc(c.owner.username)}` : '';
+}
+
 function drawHome(courses) {
   // kept deliberately light: numbers live on the Statistics page, not in the list
-  const cards = courses.map((c) => `<a class="course-tile" href="#/c/${enc(c.id)}" style="${courseColor(c.id)}">
+  const tile = (c, showCount) => `<a class="course-tile" href="#/c/${enc(c.id)}" style="${courseColor(c.id)}">
       <span class="ct-mono" aria-hidden="true">${esc([...String(c.name).trim()][0] || '·')}</span>
       <span class="ct-name">${esc(c.name)}</span>
       ${c.description ? `<span class="ct-desc">${esc(c.description)}</span>` : ''}
+      <span class="ct-meta">${courseOwnerLine(c)}${showCount ? ` · ${c.stats.total} q` : ''}</span>
       ${countdownPill(c.examDate)}
-    </a>`).join('');
+    </a>`;
+  // yours: the ones you own, plus public ones you have started; the rest of the public ones below
+  const started = (c) => c.stats.attempts || c.stats.exams || c.stats.starred;
+  const mine = courses.filter((c) => c.mine || started(c));
+  const others = courses.filter((c) => !mine.includes(c));
   app.innerHTML = `${topbar()}
     <div class="page">
       <div class="page-head">
         <h1>Your courses</h1>
         <div class="actions-row"><a class="btn ghost" href="#/import">Import questions</a><button class="btn primary" data-act="new">+ New course</button></div>
       </div>
-      ${courses.length ? `<div class="course-tiles">${cards}</div>` : `
+      ${mine.length ? `<div class="course-tiles">${mine.map((c) => tile(c, false)).join('')}</div>` : `
       <div class="card empty">
         <h2>No courses yet</h2>
-        <p>Create a course and import questions — paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
+        <p>${others.length ? 'Pick a public course below and start practising, or make your own' : 'Create a course and import questions'}: paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
         <ul class="tips">
           <li>“Find past exam papers for <i>Linear Algebra</i> and load them”</li>
           <li>“Load the questions from my vault notes in <i>Courses/Physics</i>”</li>
@@ -160,8 +249,20 @@ function drawHome(courses) {
         </ul>
         <button class="btn primary" data-act="new">+ New course</button>
       </div>`}
+      ${others.length ? `
+      <div class="page-head public-head">
+        <h2>Public courses</h2>
+        ${others.length > 6 ? '<input type="search" class="course-search" placeholder="Search public courses" aria-label="Search public courses">' : ''}
+      </div>
+      <p class="muted small">Shared by others. Practise them with your own private progress, or fork one to edit your own copy.</p>
+      <div class="course-tiles public-tiles">${others.map((c) => tile(c, true)).join('')}</div>` : ''}
     </div>`;
   $$('[data-act="new"]', app).forEach((b) => b.addEventListener('click', newCourseDialog));
+  const search = $('.course-search', app);
+  search?.addEventListener('input', () => {
+    const q = search.value.trim().toLowerCase();
+    $$('.public-tiles .course-tile', app).forEach((t, i) => { t.hidden = !!q && !`${others[i].name} ${others[i].description} ${others[i].owner?.username || ''}`.toLowerCase().includes(q); });
+  });
 }
 
 async function newCourseDialog() {
@@ -169,7 +270,8 @@ async function newCourseDialog() {
     title: 'New course',
     body: `<label class="field"><span>Name</span><input name="name" required placeholder="e.g. Linear Algebra" autofocus></label>
       <label class="field"><span>Description</span><input name="description" placeholder="optional"></label>
-      <label class="field"><span>Exam date</span><input name="examDate" type="date"></label>`,
+      <label class="field"><span>Exam date</span><input name="examDate" type="date"></label>
+      <p class="hint">New courses are private. Publish one from its page when you want others to see it.</p>`,
     buttons: [{ label: 'Cancel', value: null }, { label: 'Create', value: 'ok', primary: true }],
     withForm: true,
   });
@@ -202,7 +304,7 @@ async function coursePage(id) {
   const fresh = await loadCourse(id, { force: true });
   if (seq !== routeSeq) return;
   // only what this page shows; server-side stats are left out so they don't force a redraw
-  const shown = (d) => JSON.stringify([d.course.name, d.course.description, d.course.examDate, d.course.questions.length, d.progress, d.masteryStreak]);
+  const shown = (d) => JSON.stringify([d.course.name, d.course.description, d.course.examDate, d.course.visibility, d.course.access, d.course.forkedFrom, d.course.questions.length, d.progress, d.masteryStreak]);
   if (!cached || shown(cached) !== shown(fresh)) drawCourse(id, fresh);
 }
 
@@ -249,8 +351,14 @@ function drawCourse(id, data) {
           <div class="hero-text">
             <h1>${esc(course.name)}</h1>
             ${course.description ? `<p class="muted">${esc(course.description)}</p>` : ''}
+            <p class="course-meta">${courseOwnerLine(course)}${course.forkedFrom ? ` · forked from <a href="#/c/${enc(course.forkedFrom.id)}">${esc(course.forkedFrom.name)}</a>` : ''}</p>
             ${countdownPill(course.examDate)}
           </div>
+        </div>
+        <div class="hero-actions">
+          ${course.access.isOwner ? `<button class="btn small ${course.visibility === 'public' ? 'ghost' : 'primary'}" data-act="visibility">${course.visibility === 'public' ? `${LOCK}Make private` : `${GLOBE}Publish`}</button>`
+            : course.access.canManage ? `<button class="btn small ghost" data-act="visibility">${LOCK}Unpublish</button>` : ''}
+          <button class="btn small ghost" data-act="fork" title="Copy this course into your own private course to edit it">Fork</button>
         </div>
       </section>
       ${drill ? `<div class="resume">
@@ -265,6 +373,8 @@ function drawCourse(id, data) {
   $('[data-act="discard"]', app)?.addEventListener('click', async () => {
     if (await confirmDialog('Discard unfinished session?', 'Answers already submitted stay in your history.', 'Discard', true)) { sessions.clear(id, 'drill'); coursePage(id); }
   });
+  $('[data-act="visibility"]', app)?.addEventListener('click', () => toggleVisibility(data));
+  $('[data-act="fork"]', app)?.addEventListener('click', () => forkDialog(data));
   $$('[data-start]', app).forEach((b) => b.addEventListener('click', () => {
     if (b.getAttribute('aria-disabled') === 'true') {
       toast({ mistakes: 'No mistakes to review — nice!', starred: 'Tap ☆ on a question to save it here', practice: 'No questions match your Settings' }[b.dataset.start] || 'Nothing here yet', 'info');
@@ -272,6 +382,45 @@ function drawCourse(id, data) {
     }
     startSession(id, b.dataset.start);
   }));
+}
+
+/** Publish (everyone signed in sees it) or take a course private again. */
+async function toggleVisibility(data) {
+  const { course } = data;
+  const going = course.visibility === 'public' ? 'private' : 'public';
+  const others = data.learners ? ` ${data.learners} other ${data.learners === 1 ? 'person has' : 'people have'} practised it; they lose access until it is published again (their progress is kept).` : '';
+  const ok = going === 'public'
+    ? await confirmDialog(`Publish “${course.name}”?`, 'Everyone with an account will see this course and its questions, and can practise it or fork it. Your own progress stays private, and only you can edit the course.', 'Publish')
+    : await confirmDialog(`Make “${course.name}” private?`, `Only ${course.access.isOwner ? 'you' : 'its owner'} will see it.${others}`, course.access.isOwner ? 'Make private' : 'Unpublish', true);
+  if (!ok) return;
+  try {
+    await api('PATCH', `/api/courses/${enc(course.id)}`, { visibility: going });
+    invalidate(course.id);
+    coursesCache = null;
+    toast(going === 'public' ? 'Published: everyone can find it under Public courses' : 'Course is private now', 'ok');
+    if (course.access.isOwner) coursePage(course.id); else navigate('#/');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+/** Copy a course into a private one of your own, optionally with your progress (question ids stay the same). */
+async function forkDialog(data) {
+  const { course, stats } = data;
+  const hasProgress = stats.attempts || data.progress.exams.length || stats.starred;
+  const { value, form } = await dialog({
+    title: 'Fork this course',
+    body: `<p class="muted small">Makes a private copy that you own: fix questions, import more, change the details, then publish it if you like. ${course.access.isOwner ? '' : `The original by ${esc(course.owner?.username || 'its owner')} stays as it is.`}</p>
+      <label class="field"><span>Name</span><input name="name" value="${esc(course.name)}" required></label>
+      <label class="switch"><input type="checkbox" name="withProgress" ${hasProgress ? 'checked' : ''}><span>Copy my progress too (answers, stars, notes, mock exams, settings)</span></label>`,
+    buttons: [{ label: 'Cancel', value: null }, { label: 'Fork', value: 'ok', primary: true }],
+    withForm: true,
+  });
+  if (value !== 'ok') return;
+  try {
+    const c = await api('POST', `/api/courses/${enc(course.id)}/fork`, { name: form.name, withProgress: form.withProgress === 'on' });
+    coursesCache = null;
+    toast(`Forked into “${c.name}”`, 'ok');
+    navigate(`#/c/${enc(c.id)}`);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 function typesText(types) {
@@ -417,7 +566,9 @@ async function settingsPage(id) {
   app.innerHTML = `${topbar(`<a href="#/">Courses</a> › <a href="#/c/${enc(id)}">${esc(course.name)}</a> › Settings`)}
     <div class="page narrow">
       <h1>⚙️ Settings</h1>
-      <p class="muted">Choose what each module asks. Questions are always shuffled.</p>
+      <p class="muted">Choose what each module asks. Questions are always shuffled.
+        ${course.access.isOwner ? (course.visibility === 'public' ? 'Your settings are also where everyone else who practises this course starts.' : '')
+          : `These are your own: you start from ${esc(course.owner?.username || 'the owner')}'s settings, and changing them affects only you.`}</p>
       <form class="settings" autocomplete="off">
         <section class="card">
           <h3>Chapters <span class="muted small">— used by every module</span></h3>
@@ -465,13 +616,17 @@ async function settingsPage(id) {
       </form>
 
       <h2 class="section-title">Course</h2>
-      <form class="card course-form" id="course">
+      ${course.access.canEdit ? `<form class="card course-form" id="course">
         <label class="field"><span>Name</span><input name="name" value="${esc(course.name)}" required></label>
         <label class="field"><span>Description</span><input name="description" value="${esc(course.description || '')}"></label>
         <label class="field"><span>Exam date</span><input name="examDate" type="date" value="${esc(course.examDate || '')}"></label>
         <div class="actions-row"><button class="btn primary" type="submit">Save course</button></div>
       </form>
-      <section class="card" id="import"></section>
+      <section class="card" id="import"></section>` : `<section class="card" id="course">
+        <h3>${courseOwnerLine(course)}</h3>
+        <p class="muted">Only its owner can change the questions or details. Fork it to get your own copy that you can edit (and publish).</p>
+        <div class="actions-row"><button class="btn primary" data-act="fork">Fork this course</button></div>
+      </section>`}
       <section class="card">
         <h3>Export &amp; print</h3>
         <div class="actions-row">
@@ -480,10 +635,11 @@ async function settingsPage(id) {
         </div>
         ${course.sources?.length ? `<details><summary>Import history (${course.sources.length})</summary><ul class="sources">${course.sources.slice().reverse().map((x) => `<li>${esc(relTime(x.at))} — ${esc(x.kind)}: ${esc(x.name || '')} (${x.count})</li>`).join('')}</ul></details>` : ''}
       </section>
-      <section class="card danger-zone"><h3>Delete course</h3><p class="muted">Deletes the question bank and all progress.</p><button class="btn danger" data-act="delete">Delete course</button></section>
+      ${course.access.canManage ? `<section class="card danger-zone"><h3>Delete course</h3><p class="muted">Deletes the question bank and everyone's progress on it${data.learners ? ` (${data.learners} other ${data.learners === 1 ? 'person has' : 'people have'} practised it)` : ''}.</p><button class="btn danger" data-act="delete">Delete course</button></section>` : ''}
     </div>`;
 
-  $('form.course-form', app).addEventListener('submit', async (e) => {
+  $('[data-act="fork"]', app)?.addEventListener('click', () => forkDialog(data));
+  $('form.course-form', app)?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
       await api('PATCH', `/api/courses/${enc(id)}`, Object.fromEntries(new FormData(e.target)));
@@ -492,8 +648,8 @@ async function settingsPage(id) {
       toast('Course saved', 'ok');
     } catch (err) { toast(err.message, 'error'); }
   });
-  $('[data-act="delete"]', app).addEventListener('click', async () => {
-    if (!(await confirmDialog(`Delete “${course.name}”?`, 'The question bank and all progress will be removed.', 'Delete', true))) return;
+  $('[data-act="delete"]', app)?.addEventListener('click', async () => {
+    if (!(await confirmDialog(`Delete “${course.name}”?`, `The question bank and all progress will be removed${data.learners ? `, including that of ${data.learners} other ${data.learners === 1 ? 'person' : 'people'}` : ''}.`, 'Delete', true))) return;
     await api('DELETE', `/api/courses/${enc(id)}`);
     sessions.clear(id);
     invalidate(id);
@@ -501,7 +657,7 @@ async function settingsPage(id) {
     toast('Course deleted');
     navigate('#/');
   });
-  importPanel($('#import', app), id, () => { if (seq === routeSeq) settingsPage(id); }); // only redraw if still on this page
+  if (course.access.canEdit) importPanel($('#import', app), id, () => { if (seq === routeSeq) settingsPage(id); }); // only redraw if still on this page
 
   const form = $('form.settings', app);
   const read = () => {
@@ -542,7 +698,7 @@ async function settingsPage(id) {
   form.addEventListener('change', refresh);
   refresh();
   const anchor = /#(exam|course|import)$/.exec(location.hash);
-  if (anchor) $(`#${anchor[1]}`, app).scrollIntoView({ block: 'start' });
+  if (anchor) ($(`#${anchor[1]}`, app) || $('#course', app)).scrollIntoView({ block: 'start' });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -608,7 +764,7 @@ async function statsPage(id) {
         ${worst.length ? `<ol class="worst">${worst.map((q) => `<li><span class="badge type">${esc(TYPE_LABELS[q.type])}</span> ${mdInline(q.stem.split('\n')[0].slice(0, 120))} <span class="warn-text">✗${prog[q.id].wrong}</span> <span class="muted">✓${prog[q.id].correct}</span></li>`).join('')}</ol>
         <button class="btn primary" data-act="drill">Practice these ${worst.length}</button>` : '<p class="muted">Nothing missed yet.</p>'}
       </section>
-      <section class="card danger-zone"><h3>Reset</h3><p class="muted">Clears all attempts, stars, notes and exam history for this course. Questions are kept.</p><button class="btn danger" data-act="reset">Reset progress</button></section>
+      <section class="card danger-zone"><h3>Reset</h3><p class="muted">Clears your attempts, stars, notes and exam history for this course. Questions are kept.</p><button class="btn danger" data-act="reset">Reset progress</button></section>
     </div>`;
   $('[data-act="drill"]', app)?.addEventListener('click', () => {
     sessions.save(newSession(id, 'practice', worst.map((q) => q.id), { title: 'Most missed', slot: 'drill' }));
@@ -791,7 +947,7 @@ function previewHtml(r, filename) {
 }
 
 async function importPage(params) {
-  const courses = await api('GET', '/api/courses');
+  const courses = (await api('GET', '/api/courses')).filter((c) => c.mine); // only your own courses take imports
   const pre = params?.get?.('course');
   app.innerHTML = `${topbar(`<a href="#/">Courses</a> › Import`)}
     <div class="page narrow">

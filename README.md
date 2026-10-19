@@ -9,6 +9,21 @@ npm run demo     # optional: sample course with every question type
 npm start        # http://localhost:8710  (also printed: the LAN address for your phone/tablet)
 ```
 
+## Accounts and sharing
+
+Everyone signs in with a username and password; anyone who can reach the app can create an account. The first
+account becomes the **admin** and takes over the courses and progress that existed before accounts.
+
+- **Courses** are private (only you see them) or **public** (everyone signed in sees them under *Public courses* and
+  can practise them). A course you create starts private; **Publish** on its page shares it, **Make private** takes
+  it back. Courses from before accounts start out public.
+- **Only the owner edits** a course: details, importing, re-parsing and deleting questions. Anyone else can **Fork**
+  it, which makes a private copy they own and edit freely, and can publish too. Question ids stay the same, so a fork
+  can bring your progress with it.
+- **Progress is private.** Every answer, star, note, mock exam result, unfinished round and study setting belongs to
+  your account. Your settings start from the owner's and changing them affects only you.
+- The admin can unpublish or delete any public course (moderation), but can't edit it or see private courses.
+
 ## Flow
 
 1. **Pick a course.** The list is kept simple: each card has the course name, description and exam countdown.
@@ -63,7 +78,8 @@ printable paper with an answer key.
 
   See `.claude/skills/exam-import/SKILL.md`.
 - **In the app**: a course's Settings → Import, or **Import questions** on the course list. Paste text or drop `.md` / `.txt` / `.json` files, preview them, then import.
-- **CLI**: `npm run import -- --course "Linear Algebra" notes/*.md`
+- **CLI**: `npm run import -- --course "Linear Algebra" notes/*.md`. New courses go to the admin
+  (`--owner <username>` for someone else), private unless you add `--public`.
 
 The format is forgiving: numbered questions, `A. B. C. D.` options (on one line or several), `Answer:` or `答案：`,
 `Explanation:` or `解析：`, section headings such as `一、单项选择题`, Obsidian `![[image.png]]` embeds, `- [x]`
@@ -71,8 +87,8 @@ checkboxes and `{{cloze}}` blanks. The full reference is in [docs/FORMAT.md](doc
 
 ## Data
 
-Everything is stored in one SQLite file, `data/exam.db`: question banks, every answer you give (with its time),
-stars, notes, mock exam results and settings. Images and audio go in `data/media/<course>/`. It's written as you go,
+Everything is stored in one SQLite file, `data/exam.db`: accounts (scrypt password hashes), question banks, and each
+user's answers (with their time), stars, notes, mock exam results and settings. Images and audio go in `data/media/<course>/`. It's written as you go,
 so restarting the app loses nothing.
 
 - `npm run backup` writes a snapshot to `data/backups/` and keeps the newest 30. It's safe while the app is running.

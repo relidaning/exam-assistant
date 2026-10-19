@@ -8,6 +8,9 @@
 //
 // Options:
 //   --course <name|id>   target course (created if missing)            [required]
+//   --owner <username>   owner of a course created here (default: the admin; before anyone has signed up,
+//                        the first account to sign up gets it). New courses start private.
+//   --public             publish the course (everyone signed in can see and practise it)
 //   --description <txt>  description when creating the course
 //   --chapter <name>     default chapter for questions without one
 //   --type <type>        default question type (single|multi|judge|fill|calc|short)
@@ -30,6 +33,8 @@ function parseArgs(argv) {
     const a = argv[i];
     const val = () => argv[++i];
     if (a === '--course') opts.course = val();
+    else if (a === '--owner') opts.owner = val();
+    else if (a === '--public') opts.public = true;
     else if (a === '--description') opts.description = val();
     else if (a === '--chapter') opts.chapter = val();
     else if (a === '--type') opts.type = val();
@@ -54,8 +59,11 @@ if (opts.help || !opts.course || !opts.files.length) {
 const expand = (p) => p.replace(/^~(?=$|\/)/, process.env.HOME);
 let course = null;
 if (!opts.dryRun) {
-  course = store.ensureCourse(opts.course);
+  const owner = opts.owner ? store.findUser(opts.owner) : store.defaultOwner();
+  if (opts.owner && !owner) { console.error(`No user "${opts.owner}"`); process.exit(1); }
+  course = store.ensureCourse(opts.course, owner?.id ?? null);
   if (opts.description && !course.description) store.updateCourse(course.id, { description: opts.description });
+  if (opts.public && course.visibility !== 'public') store.updateCourse(course.id, { visibility: 'public' });
 }
 const courseId = course?.id || store.slugify(opts.course);
 

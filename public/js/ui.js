@@ -5,6 +5,9 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = escapeHtml;
 
+/** The signed-in user ({ id, username, isAdmin }), null when signed out, undefined until asked. */
+export const auth = { user: undefined, firstUser: false };
+
 export async function api(method, url, body) {
   const res = await fetch(url, {
     method,
@@ -12,6 +15,10 @@ export async function api(method, url, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && !url.startsWith('/api/auth/')) { // signed out elsewhere (or the sign-in expired)
+    auth.user = null;
+    if (!location.hash.startsWith('#/login')) location.hash = `#/login?next=${encodeURIComponent(location.hash.slice(1) || '/')}`;
+  }
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data;
 }
@@ -123,6 +130,7 @@ export function topbar(crumbs = '') {
     <div class="crumbs">${crumbs}</div>
     <div class="topbar-tools">
       <button class="icon-btn" data-setting="theme" title="Theme: ${settings.theme}" aria-label="Toggle theme">${themeIcon()}</button>
+      ${auth.user ? `<button class="icon-btn avatar" data-act="account" title="Signed in as ${esc(auth.user.username)}" aria-label="Account: ${esc(auth.user.username)}">${esc([...auth.user.username][0].toUpperCase())}</button>` : ''}
     </div>
   </header>`;
 }

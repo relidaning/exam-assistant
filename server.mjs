@@ -97,25 +97,111 @@ function preparseImport(body, courseId) {
   return { format, parsed, warnings, defaults };
 }
 
-const routes = [
-  ['GET', /^\/api\/courses$/, () => store.listCourses()],
-  ['POST', /^\/api\/courses$/, async (req) => store.createCourse(await readBody(req))],
-  ['GET', /^\/api\/courses\/([^/]+)$/, (req, [id]) => {
-    const course = store.getCourse(id);
-    const progress = store.getProgress(id);
-    return { course, progress, stats: store.courseStats(course, progress), masteryStreak: store.MASTERY_STREAK, sessions: store.getSessions(id) };
+// ---------- accounts: a cookie holds the sign-in token ----------
+const COOKIE = 'ea_sid';
+
+function cookieToken(req) {
+  for (const part of String(req.headers.cookie || '').split(';')) {
+    const [k, ...v] = part.trim().split('=');
+    if (k === COOKIE) return decodeURIComponent(v.join('='));
+  }
+  return null;
+}
+
+function setLoginCookie(res, token) {
+  // no Secure flag: the app is served over plain http on the LAN
+  const maxAge = token ? store.LOGIN_DAYS * 86400 : 0;
+  res.setHeader('set-cookie', `${COOKIE}=${token ? encodeURIComponent(token) : ''}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}`);
+}
+
+// wrong passwords per address: 10 in 15 minutes, then a pause
+const failures = new Map();
+function throttle(req) {
+  const f = failures.get(req.socket.remoteAddress);
+  if (f && f.n >= 10 && Date.now() - f.since < 15 * 60000) throw store.httpError(429, 'Too many failed sign-ins. Try again in 15 minutes.');
+}
+function failed(req) {
+  const ip = req.socket.remoteAddress;
+  const f = failures.get(ip);
+  if (!f || Date.now() - f.since > 15 * 60000) failures.set(ip, { n: 1, since: Date.now() });
+  else f.n++;
+}
+
+const originHost = (origin) => { try { return new URL(origin).host; } catch { return null; } };
+
+const signIn = (res, user) => { setLoginCookie(res, store.createLogin(user.id)); return { user }; };
+
+const authRoutes = [
+  ['GET', /^\/api\/auth\/me$/, (req, res, user) => ({ user, firstUser: !user && store.userCount() === 0 })],
+  ['POST', /^\/api\/auth\/register$/, async (req, res) => {
+    const body = await readBody(req);
+    return signIn(res, store.createUser({ username: body.username, password: body.password }));
   }],
-  // unfinished rounds, shared by every browser and device
-  ['GET', /^\/api\/courses\/([^/]+)\/sessions$/, (req, [id]) => store.getSessions(id)],
-  ['PUT', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, async (req, [id, slot]) => store.saveSession(id, slot, await readBody(req))],
-  ['DELETE', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, (req, [id, slot]) => { store.deleteSession(id, slot); return { ok: true }; }],
-  ['DELETE', /^\/api\/courses\/([^/]+)\/sessions$/, (req, [id]) => { store.deleteSession(id); return { ok: true }; }],
-  ['PATCH', /^\/api\/courses\/([^/]+)$/, async (req, [id]) => store.updateCourse(id, await readBody(req))],
-  ['DELETE', /^\/api\/courses\/([^/]+)$/, (req, [id]) => { store.deleteCourse(id); return { ok: true }; }],
-  ['GET', /^\/api\/courses\/([^/]+)\/export$/, (req, [id]) => store.getCourse(id)],
-  ['GET', /^\/api\/courses\/([^/]+)\/activity$/, (req, [id]) => {
+  ['POST', /^\/api\/auth\/login$/, async (req, res) => {
+    throttle(req);
+    const body = await readBody(req);
+    const user = store.verifyUser(body.username, body.password);
+    if (!user) { failed(req); throw store.httpError(401, 'Wrong username or password'); }
+    return signIn(res, user);
+  }],
+  ['POST', /^\/api\/auth\/logout$/, (req, res) => { store.deleteLogin(cookieToken(req)); setLoginCookie(res, null); return { ok: true }; }],
+  ['POST', /^\/api\/auth\/password$/, async (req, res, user) => {
+    if (!user) throw store.httpError(401, 'Sign in first');
+    const body = await readBody(req);
+    store.changePassword(user.id, body.current, body.password);
+    return { ok: true };
+  }],
+];
+
+// ---------- course permissions ----------
+const view = (id, user) => store.courseAccess(id, user);
+function edit(id, user) {
+  const a = store.courseAccess(id, user);
+  if (!a.canEdit) throw store.httpError(403, 'Only the owner can change this course. Fork it to make your own copy.');
+  return a;
+}
+function manage(id, user) {
+  const a = store.courseAccess(id, user);
+  if (!a.canManage) throw store.httpError(403, 'Only the owner can do this');
+  return a;
+}
+
+function courseOut(id, user) {
+  const a = view(id, user);
+  return { ...store.getCourse(id), access: { isOwner: a.isOwner, canEdit: a.canEdit, canManage: a.canManage } };
+}
+
+const routes = [
+  ['GET', /^\/api\/courses$/, (req, user) => store.listCourses(user.id)],
+  ['POST', /^\/api\/courses$/, async (req, user) => store.createCourse({ ...(await readBody(req)), id: undefined, ownerId: user.id })],
+  ['GET', /^\/api\/courses\/([^/]+)$/, (req, user, [id]) => {
+    const course = courseOut(id, user);
+    const progress = store.getProgress(id, user.id);
+    return {
+      course, progress, stats: store.courseStats(course, progress), masteryStreak: store.MASTERY_STREAK, sessions: store.getSessions(id, user.id),
+      ...(course.access.canManage ? { learners: store.learnerCount(id, user.id) } : {}),
+    };
+  }],
+  // unfinished rounds, shared by every browser and device of the user
+  ['GET', /^\/api\/courses\/([^/]+)\/sessions$/, (req, user, [id]) => { view(id, user); return store.getSessions(id, user.id); }],
+  ['PUT', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, async (req, user, [id, slot]) => { view(id, user); return store.saveSession(id, user.id, slot, await readBody(req)); }],
+  ['DELETE', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, (req, user, [id, slot]) => { view(id, user); store.deleteSession(id, user.id, slot); return { ok: true }; }],
+  ['DELETE', /^\/api\/courses\/([^/]+)\/sessions$/, (req, user, [id]) => { view(id, user); store.deleteSession(id, user.id); return { ok: true }; }],
+  ['PATCH', /^\/api\/courses\/([^/]+)$/, async (req, user, [id]) => {
+    const patch = await readBody(req);
+    const a = view(id, user);
+    if (['name', 'description', 'examDate'].some((k) => patch[k] !== undefined)) edit(id, user);
+    // anyone who manages a course may take it down; only its owner puts it up
+    if (patch.visibility !== undefined && !(patch.visibility === 'public' ? a.isOwner : a.canManage)) throw store.httpError(403, 'Only the owner can publish this course');
+    return store.updateCourse(id, patch);
+  }],
+  ['DELETE', /^\/api\/courses\/([^/]+)$/, (req, user, [id]) => { manage(id, user); store.deleteCourse(id); return { ok: true }; }],
+  ['POST', /^\/api\/courses\/([^/]+)\/fork$/, async (req, user, [id]) => { view(id, user); return store.forkCourse(id, user, await readBody(req)); }],
+  ['GET', /^\/api\/courses\/([^/]+)\/export$/, (req, user, [id]) => { view(id, user); return store.getCourse(id); }],
+  ['GET', /^\/api\/courses\/([^/]+)\/activity$/, (req, user, [id]) => {
+    view(id, user);
     const q = new URL(req.url, 'http://x').searchParams;
-    return store.getActivity(id, { days: Number(q.get('days')) || 30, tzMinutes: Number(q.get('tz')) || 0 });
+    return store.getActivity(id, user.id, { days: Number(q.get('days')) || 30, tzMinutes: Number(q.get('tz')) || 0 });
   }],
   ['POST', /^\/api\/import\/preview$/, async (req) => {
     const body = await readBody(req);
@@ -123,9 +209,9 @@ const routes = [
     const { questions, errors } = normalizeAll(parsed.questions, defaults);
     return { format, meta: parsed.meta, questions, errors, warnings };
   }],
-  ['POST', /^\/api\/courses\/([^/]+)\/import$/, async (req, [id]) => {
+  ['POST', /^\/api\/courses\/([^/]+)\/import$/, async (req, user, [id]) => {
+    edit(id, user);
     const body = await readBody(req);
-    store.getCourse(id);
     const { format, parsed, warnings, defaults } = preparseImport(body, id);
     const result = store.importQuestions(id, parsed.questions, {
       mode: body.mode, defaults, source: { kind: body.sourceKind || 'paste', name: body.filename || body.source || format },
@@ -134,7 +220,8 @@ const routes = [
   }],
   // where a question came from: its stored source text (or one rebuilt from the question) and, if its note
   // still exists, the note's current version of it
-  ['GET', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/source$/, (req, [id, qid]) => {
+  ['GET', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/source$/, (req, user, [id, qid]) => {
+    edit(id, user);
     const src = store.getQuestionSource(id, qid);
     const fromFile = src.file ? findInSourceFile(src.file, src.question.stem, src.line) : null;
     return {
@@ -144,7 +231,8 @@ const routes = [
     };
   }],
   // re-parse edited source text: preview (save: false) or replace the question (save: true), keeping its progress
-  ['POST', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/reparse$/, async (req, [id, qid]) => {
+  ['POST', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/reparse$/, async (req, user, [id, qid]) => {
+    edit(id, user);
     const body = await readBody(req);
     const old = store.getQuestionSource(id, qid);
     const content = String(body.content ?? '');
@@ -166,12 +254,13 @@ const routes = [
     const saved = store.replaceQuestion(id, qid, q, { raw: content, line: body.line ?? null });
     return { question: saved, oldId: qid, warnings };
   }],
-  ['DELETE', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)$/, (req, [id, qid]) => { store.deleteQuestion(id, qid); return { ok: true }; }],
-  ['POST', /^\/api\/courses\/([^/]+)\/attempt$/, async (req, [id]) => store.recordAttempt(id, await readBody(req))],
-  ['POST', /^\/api\/courses\/([^/]+)\/flag$/, async (req, [id]) => store.setFlags(id, await readBody(req))],
-  ['POST', /^\/api\/courses\/([^/]+)\/exam$/, async (req, [id]) => store.recordExam(id, await readBody(req))],
-  ['PUT', /^\/api\/courses\/([^/]+)\/settings$/, async (req, [id]) => store.setSettings(id, await readBody(req))],
-  ['POST', /^\/api\/courses\/([^/]+)\/reset-progress$/, (req, [id]) => { store.resetProgress(id); return { ok: true }; }],
+  ['DELETE', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)$/, (req, user, [id, qid]) => { edit(id, user); store.deleteQuestion(id, qid); return { ok: true }; }],
+  // progress: anyone who can see the course, each into their own records
+  ['POST', /^\/api\/courses\/([^/]+)\/attempt$/, async (req, user, [id]) => { view(id, user); return store.recordAttempt(id, user.id, await readBody(req)); }],
+  ['POST', /^\/api\/courses\/([^/]+)\/flag$/, async (req, user, [id]) => { view(id, user); return store.setFlags(id, user.id, await readBody(req)); }],
+  ['POST', /^\/api\/courses\/([^/]+)\/exam$/, async (req, user, [id]) => { view(id, user); return store.recordExam(id, user.id, await readBody(req)); }],
+  ['PUT', /^\/api\/courses\/([^/]+)\/settings$/, async (req, user, [id]) => { view(id, user); return store.setSettings(id, user.id, await readBody(req)); }],
+  ['POST', /^\/api\/courses\/([^/]+)\/reset-progress$/, (req, user, [id]) => { view(id, user); store.resetProgress(id, user.id); return { ok: true }; }],
 ];
 
 export function createServer() {
@@ -180,16 +269,25 @@ export function createServer() {
     const pathname = url.pathname;
     try {
       if (pathname.startsWith('/api/')) {
+        // writes only from this app's own pages (the cookie is SameSite=Lax, but other ports of this host count as same-site)
+        if (req.method !== 'GET' && req.headers.origin && originHost(req.headers.origin) !== req.headers.host) return send(res, 403, { error: 'Cross-origin request refused' });
+        const user = store.userForToken(cookieToken(req));
+        for (const [method, re, handler] of authRoutes) {
+          if (method === req.method && re.test(pathname)) return send(res, 200, await handler(req, res, user));
+        }
+        if (!user) return send(res, 401, { error: 'Sign in first' });
         for (const [method, re, handler] of routes) {
           const m = re.exec(pathname);
           if (m && method === req.method) {
-            const out = await handler(req, m.slice(1).map(decodeURIComponent));
+            const out = await handler(req, user, m.slice(1).map(decodeURIComponent));
             return send(res, 200, out);
           }
         }
         return send(res, 404, { error: 'No such endpoint' });
       }
       if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
+      // question images and media: signed-in users only (file names are content hashes, so they can't be guessed)
+      if (pathname.startsWith('/media/') && !store.userForToken(cookieToken(req))) return send(res, 401, 'Sign in first');
       serveStatic(req, res, pathname);
     } catch (e) {
       const status = e.status || 500;

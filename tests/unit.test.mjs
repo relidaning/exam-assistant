@@ -206,15 +206,17 @@ test('store: import merges by id, progress and mistakes book', () => {
   assert.equal(store.getCourse(c.id).questions.length, 1);
 
   const qid = store.getCourse(c.id).questions[0].id;
-  store.recordAttempt(c.id, { qid, correct: false });
-  let p = store.getProgress(c.id).questions[qid];
+  const U = 1;
+  store.recordAttempt(c.id, U, { qid, correct: false });
+  let p = store.getProgress(c.id, U).questions[qid];
   assert.ok(store.inWrongBook(p));
-  for (let i = 0; i < store.MASTERY_STREAK; i++) store.recordAttempt(c.id, { qid, correct: true });
-  p = store.getProgress(c.id).questions[qid];
+  for (let i = 0; i < store.MASTERY_STREAK; i++) store.recordAttempt(c.id, U, { qid, correct: true });
+  p = store.getProgress(c.id, U).questions[qid];
   assert.ok(!store.inWrongBook(p), 'mastered after a streak');
   assert.equal(p.wrong, 1);
-  store.recordAttempt(c.id, { qid, correct: false });
-  assert.ok(store.inWrongBook(store.getProgress(c.id).questions[qid]), 'back in the book after a new mistake');
+  store.recordAttempt(c.id, U, { qid, correct: false });
+  assert.ok(store.inWrongBook(store.getProgress(c.id, U).questions[qid]), 'back in the book after a new mistake');
+  assert.deepEqual(store.getProgress(c.id, 2).questions, {}, 'progress is per user');
   assert.throws(() => store.getCourse('../etc'), /Bad course id/);
 });
 
@@ -222,19 +224,21 @@ test('sqlite: every answer is logged, activity per local day, delete cascades', 
   const c = store.createCourse({ name: 'Log Course' });
   store.importQuestions(c.id, [{ stem: 'q1', options: ['a', 'b'], answer: 'A' }]);
   const qid = store.getCourse(c.id).questions[0].id;
-  store.recordAttempt(c.id, { qid, correct: true, response: 0, mode: 'practice' });
-  store.recordAttempt(c.id, { qid, correct: false, response: 1, mode: 'practice' });
-  store.setFlags(c.id, { qid, starred: true, note: 'tricky' });
-  const p = store.getProgress(c.id).questions[qid];
+  const U = 1;
+  store.recordAttempt(c.id, U, { qid, correct: true, response: 0, mode: 'practice' });
+  store.recordAttempt(c.id, U, { qid, correct: false, response: 1, mode: 'practice' });
+  store.setFlags(c.id, U, { qid, starred: true, note: 'tricky' });
+  const p = store.getProgress(c.id, U).questions[qid];
   assert.deepEqual([p.attempts, p.correct, p.wrong, p.streak, p.starred, p.note, p.lastResponse], [2, 1, 1, 0, true, 'tricky', 1]);
   const log = store.conn().prepare('SELECT correct, response, mode FROM attempts WHERE course_id = ? ORDER BY id').all(c.id);
   assert.deepEqual(log.map((r) => ({ ...r })), [{ correct: 1, response: '0', mode: 'practice' }, { correct: 0, response: '1', mode: 'practice' }]);
-  const act = store.getActivity(c.id, { days: 7, tzMinutes: 480 });
+  const act = store.getActivity(c.id, U, { days: 7, tzMinutes: 480 });
   assert.equal(act.length, 7);
   assert.deepEqual([act.at(-1).answers, act.at(-1).correct], [2, 1]);
   assert.equal(act.slice(0, -1).reduce((a, d) => a + d.answers, 0), 0);
-  store.resetProgress(c.id);
-  assert.equal(store.getActivity(c.id, { days: 7 }).at(-1).answers, 0);
+  assert.equal(store.getActivity(c.id, 2, { days: 7 }).at(-1).answers, 0, 'activity is per user');
+  store.resetProgress(c.id, U);
+  assert.equal(store.getActivity(c.id, U, { days: 7 }).at(-1).answers, 0);
   store.deleteCourse(c.id);
   assert.equal(store.conn().prepare('SELECT count(*) AS n FROM questions WHERE course_id = ?').get(c.id).n, 0);
 });
@@ -252,7 +256,7 @@ test('sqlite: JSON data from the old storage is migrated once and backed up', as
     settings: { practice: { types: ['single'] } },
   }));
   const script = `import * as s from ${JSON.stringify(new URL('../lib/store.mjs', import.meta.url).href)};
-    const c = s.getCourse('old'); const p = s.getProgress('old');
+    const c = s.getCourse('old'); const p = s.getProgress('old', 0);
     console.log(JSON.stringify({ name: c.name, examDate: c.examDate, n: c.questions.length, sources: c.sources.length, p: p.questions[c.questions[0].id], exams: p.exams.length, types: p.settings.practice.types }));`;
   const run = () => execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, EXAM_DATA_DIR: dir }, encoding: 'utf8' });
   const first = run().trim().split('\n');
@@ -279,16 +283,18 @@ test('re-parse: progress follows the question to its new id; the note\'s fixed v
   fs.writeFileSync(note, '一、多选题\n1.Which hold?（ ）\nA.one\nB.two\nB.three\n答案：AB\n\n2.Other question?\nA.x\nB.y\n答案：A\n');
   const { parseMarkdown: pm } = await import('../lib/parse-md.mjs');
   const parsed = pm(fs.readFileSync(note, 'utf8')).questions.map((q) => ({ ...q, _file: note }));
-  const c = store.createCourse({ name: 'Reparse Course' });
+  const owner = store.createUser({ username: 'reparser', password: 'secret1' });
+  const cookie = `ea_sid=${store.createLogin(owner.id)}`;
+  const c = store.createCourse({ name: 'Reparse Course', ownerId: owner.id });
   store.importQuestions(c.id, parsed);
   const broken = store.getCourse(c.id).questions[0];
   assert.equal(broken.options.length, 2, 'duplicate "B." swallowed into the stem');
-  store.recordAttempt(c.id, { qid: broken.id, correct: false });
+  store.recordAttempt(c.id, owner.id, { qid: broken.id, correct: false });
 
   const server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}/api/courses/${c.id}/questions`;
-  const call = async (method, url, body) => (await fetch(url, { method, headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body) })).json();
+  const call = async (method, url, body) => (await fetch(url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) })).json();
   try {
     let src = await call('GET', `${base}/${broken.id}/source`);
     assert.equal(src.line, 2);
@@ -316,7 +322,7 @@ test('re-parse: progress follows the question to its new id; the note\'s fixed v
     assert.equal(qs.length, 2);
     assert.equal(qs[0].id, saved.question.id, 'kept its position');
     assert.equal(qs[0].options.length, 3);
-    const p = store.getProgress(c.id).questions;
+    const p = store.getProgress(c.id, owner.id).questions;
     assert.equal(p[saved.question.id].wrong, 1, 'progress moved to the new id');
     assert.equal(p[broken.id], undefined);
     // a later re-import of the fixed note matches the re-parsed question instead of adding a duplicate
@@ -324,7 +330,7 @@ test('re-parse: progress follows the question to its new id; the note\'s fixed v
     assert.equal(again.added, 0);
     // re-parsing into a copy of another question is refused
     const other = qs[1];
-    const dup = await fetch(`${base}/${saved.question.id}/reparse`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ content: (await call('GET', `${base}/${other.id}/source`)).raw, type: other.type, save: true }) });
+    const dup = await fetch(`${base}/${saved.question.id}/reparse`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ content: (await call('GET', `${base}/${other.id}/source`)).raw, type: other.type, save: true }) });
     assert.equal(dup.status, 409);
   } finally {
     server.close();
@@ -419,11 +425,17 @@ test('HTTP API round trip', async () => {
   const server = createServer();
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
+  let cookie = '';
   const call = async (method, url, body) => {
-    const res = await fetch(base + url, { method, headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
+    const res = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
     return { status: res.status, body: await res.json() };
   };
   try {
+    assert.equal((await call('GET', '/api/courses')).status, 401, 'signed out: no API');
+    const reg = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'api-user', password: 'secret1' }) });
+    cookie = reg.headers.get('set-cookie').split(';')[0];
+    assert.match(reg.headers.get('set-cookie'), /HttpOnly; SameSite=Lax/);
+    assert.equal((await call('GET', '/api/auth/me')).body.user.username, 'api-user');
     const created = await call('POST', '/api/courses', { name: '数据结构' });
     assert.equal(created.status, 200);
     const id = created.body.id;
@@ -453,9 +465,155 @@ test('HTTP API round trip', async () => {
     assert.deepEqual((await call('GET', `/api/courses/${encodeURIComponent(id)}/sessions`)).body, {}, 'a progress reset drops unfinished rounds');
     assert.equal((await call('GET', `/api/courses/${encodeURIComponent(id)}`)).body.progress.settings.exam.timeMin, 45, 'settings survive a progress reset');
     assert.equal((await call('GET', '/api/courses/nope')).status, 404);
-    assert.equal((await fetch(`${base}/media/..%2F..%2Fpackage.json`)).status, 403);
+    assert.equal((await fetch(`${base}/media/..%2F..%2Fpackage.json`, { headers: { cookie } })).status, 403);
+    assert.equal((await fetch(`${base}/media/x/y.png`)).status, 401, 'media needs a sign-in');
+    const foreign = await fetch(`${base}/api/courses`, { method: 'POST', headers: { 'content-type': 'application/json', cookie, origin: 'http://evil.example' }, body: '{"name":"x"}' });
+    assert.equal(foreign.status, 403, 'writes from another origin are refused');
+    await call('POST', '/api/auth/logout');
+    assert.equal((await call('GET', '/api/courses')).status, 401, 'the token is gone after signing out');
     assert.equal((await fetch(`${base}/c/x/run`)).status, 200); // SPA fallback
   } finally {
     server.close();
   }
+});
+
+test('accounts: private progress, public courses, publish, fork', async () => {
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = async (username, password = 'secret1') => {
+    let res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    if (res.status === 401) res = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    assert.equal(res.status, 200, `sign in as ${username}`);
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return async (method, url, body) => {
+      const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+  };
+  try {
+    const ann = await as('ann');
+    const bob = await as('bob');
+    assert.equal((await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'ANN', password: 'secret1' }) })).status, 409, 'names are unique, ignoring case');
+    assert.equal((await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'carl', password: '123' }) })).status, 400, 'short password');
+    assert.equal((await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username: 'ann', password: 'nope' }) })).status, 401);
+
+    // ann's new course is private: bob can't see it, or touch it
+    const c = (await ann('POST', '/api/courses', { name: 'Shared Bank' })).body;
+    assert.equal(c.visibility, 'private');
+    await ann('POST', `/api/courses/${c.id}/import`, { content: JSON.stringify([{ stem: 'q1', options: ['a', 'b'], answer: 'A' }, { stem: 'q2', options: ['a', 'b'], answer: 'B' }]) });
+    await ann('PUT', `/api/courses/${c.id}/settings`, { exam: { perType: { single: 2 }, timeMin: 20 } });
+    assert.ok(!(await bob('GET', '/api/courses')).body.some((x) => x.id === c.id));
+    assert.equal((await bob('GET', `/api/courses/${c.id}`)).status, 404, 'a private course of someone else does not exist for you');
+    assert.equal((await bob('POST', `/api/courses/${c.id}/attempt`, { qid: 'x', correct: true })).status, 404);
+    assert.equal((await bob('PATCH', `/api/courses/${c.id}`, { visibility: 'public' })).status, 404);
+
+    // published: bob sees it, practises it with his own progress and settings, but can't edit it
+    assert.equal((await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'public' })).body.visibility, 'public');
+    const listed = (await bob('GET', '/api/courses')).body.find((x) => x.id === c.id);
+    assert.deepEqual([listed.mine, listed.owner.username, listed.stats.total], [false, 'ann', 2]);
+    const view = (await bob('GET', `/api/courses/${c.id}`)).body;
+    assert.deepEqual(view.course.access, { isOwner: false, canEdit: false, canManage: false });
+    assert.equal(view.progress.settings.exam.timeMin, 20, "starts from the owner's settings");
+    const [q1, q2] = view.course.questions.map((q) => q.id);
+    await ann('POST', `/api/courses/${c.id}/attempt`, { qid: q1, correct: true });
+    await bob('POST', `/api/courses/${c.id}/attempt`, { qid: q1, correct: false });
+    await bob('POST', `/api/courses/${c.id}/flag`, { qid: q2, starred: true, note: 'bob only' });
+    await bob('POST', `/api/courses/${c.id}/exam`, { title: 'P', total: 2, score: 1, maxScore: 2, correct: 1 });
+    await bob('PUT', `/api/courses/${c.id}/sessions/practice`, { qids: [q1], entries: {} });
+    await bob('PUT', `/api/courses/${c.id}/settings`, { exam: { perType: { single: 1 }, timeMin: 5 } });
+    const annSees = (await ann('GET', `/api/courses/${c.id}`)).body;
+    assert.deepEqual([annSees.progress.questions[q1].correct, annSees.progress.questions[q1].wrong, annSees.progress.questions[q2], annSees.progress.exams.length, annSees.sessions],
+      [1, 0, undefined, 0, {}], "bob's answers, stars, notes, exams and rounds are invisible to ann");
+    assert.equal(annSees.progress.settings.exam.timeMin, 20, "bob's settings don't change the course's");
+    assert.equal(annSees.learners, 1, 'the owner sees how many others practise it');
+    const bobSees = (await bob('GET', `/api/courses/${c.id}`)).body;
+    assert.deepEqual([bobSees.progress.questions[q1].wrong, bobSees.progress.questions[q2].note, bobSees.progress.settings.exam.timeMin, bobSees.stats.wrongBook], [1, 'bob only', 5, 1]);
+    assert.equal((await bob('GET', '/api/courses')).body.find((x) => x.id === c.id).stats.wrongBook, 1, 'list stats are your own');
+    assert.equal((await ann('GET', '/api/courses')).body.find((x) => x.id === c.id).stats.wrongBook, 0);
+    for (const [method, url, body] of [
+      ['PATCH', `/api/courses/${c.id}`, { name: 'hijacked' }],
+      ['POST', `/api/courses/${c.id}/import`, { content: '1. x ____\n答案：y' }],
+      ['DELETE', `/api/courses/${c.id}/questions/${q1}`],
+      ['GET', `/api/courses/${c.id}/questions/${q1}/source`],
+      ['POST', `/api/courses/${c.id}/questions/${q1}/reparse`, { content: '1. x?\nA. a\nB. b\n答案：A', save: true }],
+      ['DELETE', `/api/courses/${c.id}`],
+      ['PATCH', `/api/courses/${c.id}`, { visibility: 'private' }],
+    ]) assert.equal((await bob(method, url, body)).status, 403, `${method} ${url} is the owner's`);
+    await bob('POST', `/api/courses/${c.id}/reset-progress`);
+    assert.equal((await ann('GET', `/api/courses/${c.id}`)).body.progress.questions[q1].correct, 1, "a reset clears only your own progress");
+    await bob('POST', `/api/courses/${c.id}/attempt`, { qid: q1, correct: false });
+
+    // bob forks it: a private copy he owns, his progress comes along, ann's doesn't
+    const fork = (await bob('POST', `/api/courses/${c.id}/fork`, { withProgress: true })).body;
+    assert.notEqual(fork.id, c.id);
+    assert.deepEqual([fork.name, fork.visibility, fork.owner.username, fork.forkedFrom.id, fork.questions.length], ['Shared Bank', 'private', 'bob', c.id, 2]);
+    const fv = (await bob('GET', `/api/courses/${fork.id}`)).body;
+    assert.deepEqual(fv.course.access, { isOwner: true, canEdit: true, canManage: true });
+    assert.deepEqual([fv.progress.questions[q1].wrong, fv.progress.settings.exam.timeMin], [1, 5], 'progress and settings follow the fork');
+    assert.equal((await ann('GET', `/api/courses/${fork.id}`)).status, 404, 'the fork is private');
+    assert.equal((await bob('PATCH', `/api/courses/${fork.id}`, { name: 'Bank, fixed' })).status, 200);
+    assert.equal((await bob('POST', `/api/courses/${fork.id}/import`, { content: JSON.stringify([{ stem: 'q3', answer: 'yes' }]) })).body.added, 1);
+    assert.equal((await ann('GET', `/api/courses/${c.id}`)).body.course.questions.length, 2, 'the original is untouched');
+    assert.equal((await bob('PATCH', `/api/courses/${fork.id}`, { visibility: 'public' })).status, 200);
+    assert.equal((await ann('GET', '/api/courses')).body.find((x) => x.id === fork.id).owner.username, 'bob', 'a published fork shows up for everyone');
+    assert.equal((await bob('POST', `/api/courses/${fork.id}/fork`, {})).body.id !== fork.id, true, 'forking your own course makes another copy');
+
+    // ann takes hers private again: bob loses access, his progress stays for when it comes back
+    await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'private' });
+    assert.equal((await bob('GET', `/api/courses/${c.id}`)).status, 404);
+    await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'public' });
+    assert.equal((await bob('GET', `/api/courses/${c.id}`)).body.progress.questions[q1].wrong, 1);
+
+    // the admin (first account in this data dir) may take down anyone's public course, but not edit it
+    const admin = await as('reparser');
+    assert.equal((await admin('PATCH', `/api/courses/${fork.id}`, { name: 'nope' })).status, 403);
+    assert.equal((await admin('PATCH', `/api/courses/${fork.id}`, { visibility: 'private' })).status, 200);
+    assert.equal((await admin('GET', `/api/courses/${fork.id}`)).status, 404, 'and then it is private to its owner');
+
+    // password change
+    assert.equal((await ann('POST', '/api/auth/password', { current: 'wrong', password: 'newpass1' })).status, 403);
+    assert.equal((await ann('POST', '/api/auth/password', { current: 'secret1', password: 'newpass1' })).status, 200);
+    await as('ann', 'newpass1');
+  } finally {
+    server.close();
+  }
+});
+
+test('migration: a database from before accounts keeps everything, published, for the first account', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { DatabaseSync } = await import('node:sqlite');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-accounts-'));
+  const old = new DatabaseSync(path.join(dir, 'exam.db'));
+  old.exec(`
+    CREATE TABLE courses (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL DEFAULT '', exam_date TEXT, settings TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+    CREATE TABLE questions (course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, id TEXT NOT NULL, position INTEGER NOT NULL, type TEXT NOT NULL, chapter TEXT, data TEXT NOT NULL, raw TEXT, src_file TEXT, src_line INTEGER, PRIMARY KEY (course_id, id));
+    CREATE TABLE attempts (id INTEGER PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, question_id TEXT NOT NULL, at TEXT NOT NULL, correct INTEGER NOT NULL, score REAL, response TEXT, mode TEXT);
+    CREATE INDEX attempts_course_at ON attempts (course_id, at);
+    CREATE TABLE question_state (course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, question_id TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, correct INTEGER NOT NULL DEFAULT 0, wrong INTEGER NOT NULL DEFAULT 0, streak INTEGER NOT NULL DEFAULT 0, last_at TEXT, last_wrong_at TEXT, last_score REAL, last_response TEXT, last_mode TEXT, history TEXT NOT NULL DEFAULT '[]', starred INTEGER NOT NULL DEFAULT 0, note TEXT, cleared INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (course_id, question_id));
+    CREATE TABLE exams (id INTEGER PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, at TEXT NOT NULL, title TEXT, total INTEGER, score REAL, max_score REAL, correct INTEGER, duration_sec INTEGER, by_type TEXT);
+    CREATE INDEX exams_course ON exams (course_id, at);
+    CREATE TABLE sources (id INTEGER PRIMARY KEY, course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, kind TEXT, name TEXT, at TEXT, count INTEGER);
+    CREATE TABLE sessions (course_id TEXT NOT NULL REFERENCES courses(id) ON DELETE CASCADE, slot TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY (course_id, slot));
+    INSERT INTO courses VALUES ('old', 'Old', '', NULL, '{"exam":{"perType":{"single":1},"timeMin":9}}', '2026-01-01', '2026-01-01');
+    INSERT INTO questions (course_id, id, position, type, data) VALUES ('old', 'q1', 1, 'single', '{"id":"q1","type":"single","stem":"s","options":["a","b"],"answer":0}');
+    INSERT INTO attempts (course_id, question_id, at, correct) VALUES ('old', 'q1', '2026-01-02T00:00:00Z', 0);
+    INSERT INTO question_state (course_id, question_id, attempts, wrong, starred) VALUES ('old', 'q1', 1, 1, 1);
+    INSERT INTO exams (course_id, at, title, total, score, max_score, correct, duration_sec, by_type) VALUES ('old', '2026-01-03', 'P', 1, 0, 2, 0, 9, '{}');
+    INSERT INTO sessions VALUES ('old', 'practice', '{"qids":["q1"]}', '2026-01-04');`);
+  old.close();
+  const script = `import * as s from ${JSON.stringify(new URL('../lib/store.mjs', import.meta.url).href)};
+    s.conn();
+    const u = s.createUser({ username: 'me', password: 'secret1' });
+    const other = s.createUser({ username: 'you', password: 'secret1' });
+    const c = s.courseAccess('old', u);
+    const p = s.getProgress('old', u.id);
+    console.log(JSON.stringify({ admin: u.isAdmin, otherAdmin: other.isAdmin, vis: c.row.visibility, owner: c.isOwner, q: p.questions.q1, exams: p.exams.length, sess: Object.keys(s.getSessions('old', u.id)),
+      timeMin: p.settings.exam.timeMin, act: s.getActivity('old', u.id, { days: 400 }).reduce((a, d) => a + d.answers, 0), others: s.getProgress('old', other.id).questions }));`;
+  const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, EXAM_DATA_DIR: dir }, encoding: 'utf8' }).trim().split('\n');
+  assert.match(out[0], /^Adding accounts to the database\. Backup first: .*exam-before-accounts-\d+\.db$/);
+  const r = JSON.parse(out.at(-1));
+  assert.deepEqual([r.admin, r.otherAdmin, r.vis, r.owner, r.q.wrong, r.q.starred, r.exams, r.sess, r.timeMin, r.act, r.others],
+    [true, false, 'public', true, 1, true, 1, ['practice'], 9, 1, {}]);
+  assert.equal(fs.readdirSync(path.join(dir, 'backups')).length, 1);
 });
