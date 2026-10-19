@@ -125,7 +125,7 @@ export function themeIcon() {
   return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">${paths[settings.theme]}</svg>`;
 }
 
-// the four main tabs: a bar at the bottom on phones, inside the top bar on wide screens
+// the four main tabs: a bar along the bottom on phones, a sidebar on the left on wide screens
 const TAB_ITEMS = [
   ['/', 'Public', '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17M12 3.5a13 13 0 0 0 0 17"/>'],
   ['/progress', 'In progress', '<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5v7l5.5-3.5z"/>'],
@@ -135,20 +135,20 @@ const TAB_ITEMS = [
 
 export function tabbar() {
   const active = tabOf(location.hash);
-  return `<nav class="tabbar" aria-label="Main">${TAB_ITEMS.map(([path, label, ico]) => `<a href="#${path}" class="tab" ${path === active ? 'aria-current="page"' : ''}>
+  return `<nav class="tabbar" aria-label="Main"><a class="brand tab-brand" href="#/"><span class="logo" aria-hidden="true">✎</span><span>Exam Assistant</span></a>${TAB_ITEMS.map(([path, label, ico]) => `<a href="#${path}" class="tab" ${path === active ? 'aria-current="page"' : ''}>
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ico}</svg><span>${label}</span></a>`).join('')}</nav>`;
 }
 
 export function topbar(crumbs = '') {
   return `<header class="topbar has-tabs">
     <a class="brand" href="#/"><span class="logo" aria-hidden="true">✎</span><span>Exam Assistant</span></a>
-    ${tabbar()}
     <div class="crumbs">${crumbs}</div>
     <div class="topbar-tools">
       <button class="icon-btn" data-setting="theme" title="Theme: ${settings.theme}" aria-label="Toggle theme">${themeIcon()}</button>
       ${auth.user ? `<button class="icon-btn avatar" data-act="account" title="Signed in as ${esc(auth.user.username)}" aria-label="Account: ${esc(auth.user.username)}">${esc([...auth.user.username][0].toUpperCase())}</button>` : ''}
     </div>
-  </header>`;
+  </header>
+  ${tabbar()}`; // outside the header: its backdrop blur would pin a fixed bar to the header
 }
 
 applySettings();

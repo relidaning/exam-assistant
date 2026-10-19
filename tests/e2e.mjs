@@ -99,6 +99,8 @@ try {
   await page.waitForSelector('.course-tile');
   check((await page.textContent('.ct-name')).includes('Demo'), 'the Public tab lists the published course');
   check(await page.$('.search-bar .course-search') && (await page.getAttribute('.tabbar [aria-current="page"]', 'href')) === '#/', 'a search bar on top, the Public tab is current');
+  const side = await page.evaluate(() => { const t = document.querySelector('.tabbar').getBoundingClientRect(), p = document.querySelector('.page').getBoundingClientRect(); return [t.left, t.top, t.height, t.right, p.left, getComputedStyle(document.querySelector('.tabbar')).flexDirection, innerHeight]; });
+  check(side[0] === 0 && side[1] === 0 && side[2] === side[6] && side[5] === 'column' && side[4] >= side[3], `on a laptop the tabs are a sidebar on the left, beside the page (${side})`);
   await page.fill('.course-search', 'no such course');
   check(await page.isHidden('.public-tiles .course-tile') && await page.isVisible('.no-match'), 'search filters the public courses');
   check(await page.isVisible('[data-act="clear-search"]'), 'a clear button shows while there is text');

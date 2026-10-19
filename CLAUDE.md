@@ -20,6 +20,8 @@ types per module, exam composition/duration) decide what each module asks. Theme
 - `npm run backup` — consistent snapshot of the database to `data/backups/` (keeps 30)
 - `node scripts/merge-account.mjs --from <user> --into <user>` — fold a stray account (a Google/GitHub sign-in that made
   a new account instead of linking) into the real one; refuses if it has progress. Back up first
+- `node scripts/screenshots.mjs` — re-take the README screenshots in `docs/screenshots/` (own server on sample data,
+  never the user's)
 - `npm run icons` — re-render the PNG home-screen icons from `public/icon.svg` (iOS can't use SVG touch icons)
 
 ## Loading questions (the user's three sources)
@@ -49,7 +51,7 @@ Format reference: `docs/FORMAT.md`. Never write to `data/exam.db` by hand — go
 - `public/js/grade.js` — shared by browser + Node: expression evaluator, per-type grading, answer text
 - `public/js/session.js` — modules, settings → picking config, shuffled picking, exam summary/scoring (pure)
 - `public/js/answer.js` — question card + per-type answer widgets; `run.js` — answer flow/result; `app.js` — router/pages.
-  Four tabs (`ui.js` `tabbar`, bottom bar under 900 px): Public `#/` (search; every course opens its public page
+  Four tabs (`ui.js` `tabbar`, bottom bar under 900 px, left sidebar from 900 px, rendered after the header): Public `#/` (search; every course opens its public page
   `#/p/<id>`, info only, even your own; practising someone else's needs a fork, enforced only in the UI; the server
   still accepts answers there), In progress `#/progress` (`GET /api/sessions`, resume/delete), My courses `#/courses` (hub:
   four modules + Statistics), Settings `#/settings` (each course's settings at `#/settings/c/<id>`, account, theme).
