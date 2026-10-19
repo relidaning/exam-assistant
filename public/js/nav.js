@@ -1,7 +1,28 @@
 // Hierarchical navigation: Back (button, swipe, gesture) always goes to the parent page, never to "whatever came before".
 // The browser history stack is kept equal to the current page's ancestor chain, e.g.
-//   #/  →  #/c/<id>  →  #/c/<id>/run/<slot>
+//   #/  →  #/courses  →  #/c/<id>  →  #/c/<id>/run/<slot>
 // Going down pushes one entry; going up or sideways first rewinds history to the common ancestor.
+// The four tabs are children of the first one (Public, "/"); a course page belongs to the tab it was opened from,
+// a course's public page (#/p/<id>) to Public.
+
+export const TABS = ['/', '/progress', '/courses', '/settings'];
+let tabHome = (() => { try { return sessionStorage.getItem('exam.tab') || '/'; } catch { return '/'; } })();
+
+/** The tab a page sits under (course pages: the tab they were opened from). */
+export function tabOf(path) {
+  const p = cleanPath(path);
+  if (p.startsWith('/c/')) return tabHome;
+  if (p === '/import') return '/courses';
+  return TABS.find((t) => t !== '/' && (p === t || p.startsWith(`${t}/`))) || '/';
+}
+
+/** Called when a tab page is shown: course pages opened from here come back to it. */
+function noteTab(path) {
+  const p = cleanPath(path);
+  if (!TABS.includes(p) || p === tabHome) return;
+  tabHome = p;
+  try { sessionStorage.setItem('exam.tab', p); } catch { /* private mode */ }
+}
 
 let render = () => {};
 let lastRendered = null;
@@ -22,6 +43,10 @@ export function parentOf(path) {
   let m;
   if ((m = /^\/c\/([^/]+)\/review\/(\w+)\/\d+$/.exec(p))) return `/c/${m[1]}/result/${m[2]}`;
   if ((m = /^\/c\/([^/]+)\/.+$/.exec(p))) return `/c/${m[1]}`;
+  if (/^\/c\/[^/]+$/.test(p)) return tabHome;
+  if (/^\/p\/[^/]+$/.test(p)) return '/'; // a course's public page belongs to the Public tab
+  if (p === '/import') return '/courses';
+  if (p.startsWith('/settings/')) return '/settings';
   return '/';
 }
 
@@ -38,6 +63,7 @@ const popped = () => new Promise((resolve) => window.addEventListener('popstate'
 
 function show() {
   lastRendered = current();
+  noteTab(lastRendered);
   render();
 }
 

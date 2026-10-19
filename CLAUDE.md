@@ -1,8 +1,8 @@
 # Exam Assistant
 
 Local web app for exam prep, with accounts: courses are private or public (owner edits, others practise or fork);
-each user's progress is private. Simple course cards (name, description, countdown) → course page with module panels
-(practice, mistakes, mock exam, starred) and tools (statistics, settings, questions) → an answer flow fitted to each
+each user's progress is private. Four tabs: Public, In progress, My courses, Settings. Simple course cards (name, description, countdown) → course page
+with module panels (practice, mistakes, mock exam, starred) and Statistics → an answer flow fitted to each
 question type. All numbers live on the Statistics page. Questions are always shuffled; per-course Settings (chapters,
 types per module, exam composition/duration) decide what each module asks. Theme colour: amber. Node ≥ 20, no framework, no build step.
 
@@ -18,6 +18,8 @@ types per module, exam composition/duration) decide what each module asks. Theme
   `scripts/import.mjs` header). New courses go to the admin and start private
 - `npm run demo` — (re)load the demo course from `examples/demo-course.md`
 - `npm run backup` — consistent snapshot of the database to `data/backups/` (keeps 30)
+- `node scripts/merge-account.mjs --from <user> --into <user>` — fold a stray account (a Google/GitHub sign-in that made
+  a new account instead of linking) into the real one; refuses if it has progress. Back up first
 - `npm run icons` — re-render the PNG home-screen icons from `public/icon.svg` (iOS can't use SVG touch icons)
 
 ## Loading questions (the user's three sources)
@@ -46,7 +48,13 @@ Format reference: `docs/FORMAT.md`. Never write to `data/exam.db` by hand — go
   are claimed by the first account (admin)
 - `public/js/grade.js` — shared by browser + Node: expression evaluator, per-type grading, answer text
 - `public/js/session.js` — modules, settings → picking config, shuffled picking, exam summary/scoring (pure)
-- `public/js/answer.js` — question card + per-type answer widgets; `run.js` — answer flow/result; `app.js` — router/pages
+- `public/js/answer.js` — question card + per-type answer widgets; `run.js` — answer flow/result; `app.js` — router/pages.
+  Four tabs (`ui.js` `tabbar`, bottom bar under 900 px): Public `#/` (search; every course opens its public page
+  `#/p/<id>`, info only, even your own; practising someone else's needs a fork, enforced only in the UI; the server
+  still accepts answers there), In progress `#/progress` (`GET /api/sessions`, resume/delete), My courses `#/courses` (hub:
+  four modules + Statistics), Settings `#/settings` (each course's settings at `#/settings/c/<id>`, account, theme).
+  `nav.js` keeps Back = parent page; a course page's parent is the tab it was opened from. Only an admin publishes or
+  unpublishes (server-enforced). A course description's first line is its summary; the rest is the public page's About
 - `data/` is user data (git-ignored); `examples/` holds the demo bank
 
 ## Conventions

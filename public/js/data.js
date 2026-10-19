@@ -98,6 +98,12 @@ export async function flushSessions(courseId) {
   await queues.get(courseId);
 }
 
+/** Same for every course: before asking the server for all of the user's rounds. */
+export async function flushAllSessions() {
+  const ids = new Set([...[...pending.values()].map((p) => p.courseId), ...queues.keys()]);
+  await Promise.all([...ids].map(flushSessions));
+}
+
 const exitHooks = new Set();
 /** Run fn just before pending saves go out when the page is hidden or left (e.g. to bank a running clock). */
 export function beforeExit(fn) { exitHooks.add(fn); return () => exitHooks.delete(fn); }

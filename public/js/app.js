@@ -2,7 +2,7 @@
 import { $, $$, esc, api, auth, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, themeIcon } from './ui.js';
 import { md, mdInline } from './render.js';
 import { TYPES, TYPE_LABELS, answerText, isOpen } from './grade.js';
-import { loadCourse, peekCourse, invalidate, sessions } from './data.js';
+import { loadCourse, peekCourse, invalidate, sessions, flushAllSessions } from './data.js';
 import { MODULES, pickQuestions, inMistakes, accuracy, moduleConfig, examConfigured, examSummary, pointsFor, PAST_PAPER_TAG } from './session.js';
 import { renderRun, renderResult, newSession, teardownRun } from './run.js';
 import { navigate, startNav } from './nav.js';
@@ -15,7 +15,7 @@ for (const type of ['gesturestart', 'gesturechange', 'gestureend']) document.add
 document.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
 document.addEventListener('click', (e) => {
-  if (e.target.closest('[data-act="account"]')) { navigate('#/account'); return; }
+  if (e.target.closest('[data-act="account"]')) { navigate('#/settings'); return; }
   const b = e.target.closest('[data-setting]');
   if (b) {
     const s = b.dataset.setting;
@@ -38,20 +38,27 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- router ----------
+// tabs: Public (/), In progress, My courses, Settings; a course's own settings live under the Settings tab
+const toCourseSettings = (id) => navigate(`#/settings/c/${enc(id)}${/#(exam|course|import)$/.exec(location.hash)?.[0] || ''}`);
 const routes = [
   [/^\/login$/, loginPage],
-  [/^\/account$/, accountPage],
-  [/^\/?$/, home],
+  [/^\/account$/, (params) => navigate(`#/settings${String(params) ? `?${params}` : ''}`)], // old links (and the OAuth "linked" return)
+  [/^\/?$/, publicPage],
+  [/^\/progress$/, progressPage],
+  [/^\/courses$/, myCoursesPage],
+  [/^\/settings$/, settingsTab],
   [/^\/import$/, importPage],
   [/^\/c\/([^/]+)$/, coursePage],
-  [/^\/c\/([^/]+)\/settings(?:#\w+)?$/, settingsPage],
-  [/^\/c\/([^/]+)\/setup\/\w+$/, settingsPage], // old links
+  [/^\/p\/([^/]+)$/, publicCoursePage],
+  [/^\/settings\/c\/([^/#]+)(?:#\w+)?$/, settingsPage],
+  [/^\/c\/([^/]+)\/settings(?:#\w+)?$/, toCourseSettings], // old links
+  [/^\/c\/([^/]+)\/setup\/\w+$/, toCourseSettings],
   [/^\/c\/([^/]+)\/run\/(\w+)$/, (id, slot) => renderRun(app, id, slot)],
   [/^\/c\/([^/]+)\/review\/(\w+)\/(\d+)$/, (id, slot, n) => renderRun(app, id, slot, { reviewIdx: Number(n) })],
   [/^\/c\/([^/]+)\/result\/(\w+)$/, (id, slot) => renderResult(app, id, slot)],
   [/^\/c\/([^/]+)\/(?:run|result)$/, (id) => navigate(`#/c/${enc(id)}`)], // links from before per-module sessions
   [/^\/c\/([^/]+)\/stats$/, statsPage],
-  [/^\/c\/([^/]+)\/manage$/, (id) => navigate(`#/c/${enc(id)}/settings#import`)], // old links
+  [/^\/c\/([^/]+)\/manage$/, (id) => navigate(`#/settings/c/${enc(id)}#import`)], // old links
   [/^\/c\/([^/]+)\/print$/, printPage],
 ];
 
@@ -76,13 +83,13 @@ async function route() {
   for (const [re, fn] of routes) {
     const m = re.exec(pathPart);
     if (!m) continue;
-    document.body.dataset.route = pathPart.split('/')[3] || pathPart.split('/')[1] || 'home';
+    document.body.dataset.route = pathPart.startsWith('/c/') ? pathPart.split('/')[3] || 'course' : pathPart.split('/')[1] || 'home';
     const seq = routeSeq;
     try {
       await fn(...m.slice(1).map(decodeURIComponent), new URLSearchParams(query));
     } catch (e) {
       console.error(e);
-      if (seq === routeSeq) app.innerHTML = `${topbar()}<div class="page narrow"><div class="card empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a class="btn" href="#/">Back to courses</a></div></div>`;
+      if (seq === routeSeq) app.innerHTML = `${topbar()}<div class="page narrow"><div class="card empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a class="btn" href="#/courses">Back to courses</a></div></div>`;
     }
     return;
   }
@@ -157,29 +164,41 @@ async function loginPage(params) {
         auth.firstUser = false;
         invalidate();
         coursesCache = null;
-        navigate(`#${next === '/login' ? '/' : next}`);
+        navigate(`#${next === '/login' ? '/' : next}`); // the Public tab, unless you were on your way somewhere
       } catch (err) { $('.login-error', app).textContent = err.message; }
     });
   };
   draw();
 }
 
-/** Your account: who you are, how you sign in (password, linked Google/GitHub), sign out. */
-async function accountPage(params) {
+/** Settings tab: each course's practice / mock exam settings, your account (sign-in methods), appearance, sign out. */
+async function settingsTab(params) {
   const seq = routeSeq;
-  Object.assign(auth, await api('GET', '/api/auth/me'));
+  const [me, courses] = await Promise.all([api('GET', '/api/auth/me'), api('GET', '/api/courses')]);
   if (seq !== routeSeq) return;
+  Object.assign(auth, me);
+  coursesCache = courses;
+  const mine = courses.filter((c) => c.mine);
   const u = auth.user;
   const linked = Object.fromEntries((auth.identities || []).map((x) => [x.provider, x]));
   const label = { google: 'Google', github: 'GitHub' };
   const shown = [...new Set([...(auth.providers || []).map((p) => p.id), ...Object.keys(linked)])];
   const signIns = (u.hasPassword ? 1 : 0) + Object.keys(linked).length;
-  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › Account`)}
+  app.innerHTML = `${topbar()}
     <div class="page narrow">
-      <h1>${esc(u.username)}</h1>
-      <p class="muted">${u.isAdmin ? 'Admin: you can also unpublish or delete any public course. ' : ''}Your answers, stars, notes and exam results are visible only to you.</p>
-      <section class="card">
-        <h3>Sign-in methods</h3>
+      <h1>Settings</h1>
+      <section class="card" id="courses">
+        <h3>Practice &amp; mock exams</h3>
+        <p class="muted small">Per course: chapters, question types and counts, the mock exam's questions and duration. Also the course's details and imports.</p>
+        ${mine.length ? `<ul class="row-list">${mine.map((c) => `<li><a class="row-link" href="#/settings/c/${enc(c.id)}">${monogram(c.name, '', c.id)}
+            <span class="grow"><b>${esc(c.name)}</b><small class="muted">${c.stats.total} questions${c.examDate && daysUntil(c.examDate) >= 0 ? ` · exam ${esc(c.examDate)}` : ''}</small></span>${icon('chevron', 'row-chev')}</a></li>`).join('')}</ul>`
+          : '<p class="muted">No courses of your own yet. Fork a public course, or create one under <a href="#/courses">My courses</a>.</p>'}
+      </section>
+      <section class="card" id="account">
+        <h3>Account</h3>
+        <div class="account-head"><span class="avatar-big" aria-hidden="true">${esc([...u.username][0].toUpperCase())}</span>
+          <span class="grow"><b>${esc(u.username)}</b><small class="muted">${u.isAdmin ? 'Admin: you can also unpublish or delete any public course. ' : ''}Your answers, stars, notes and exam results are visible only to you.</small></span></div>
+        <h4>Sign-in methods</h4>
         <ul class="signin-list">
           <li><span class="signin-ico" aria-hidden="true">🔑</span><span class="grow"><b>Password</b><small class="muted">${u.hasPassword ? `Sign in as “${esc(u.username)}”` : 'Not set'}</small></span>
             <button class="btn small ghost" data-act="password">${u.hasPassword ? 'Change' : 'Set password'}</button></li>
@@ -191,10 +210,20 @@ async function accountPage(params) {
         </ul>
         ${shown.length ? '<p class="hint">Linking lets you sign in with that account too. Progress stays on this account.</p>' : '<p class="hint">Google and GitHub sign-in are not set up on this server.</p>'}
       </section>
+      <section class="card">
+        <h3>Appearance</h3>
+        <div class="segmented theme-pick" role="radiogroup" aria-label="Theme">${[['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) => `<label><input type="radio" name="theme" value="${v}" ${settings.theme === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+        <p class="hint">Auto follows your device.</p>
+      </section>
       <section class="card"><h3>Sign out</h3><p class="muted">On this device. Your progress stays on the server.</p><button class="btn" data-act="logout">Sign out</button></section>
     </div>`;
   const note = params?.get?.('error') || (params?.get?.('linked') && `${label[params.get('linked')] || 'Account'} linked`);
-  if (note) { toast(note, params.get('error') ? 'error' : 'ok', 4000); history.replaceState(history.state, '', '#/account'); }
+  if (note) { toast(note, params.get('error') ? 'error' : 'ok', 4000); history.replaceState(history.state, '', '#/settings'); }
+  $$('input[name="theme"]', app).forEach((r) => r.addEventListener('change', () => {
+    settings.theme = r.value;
+    applySettings();
+    $$('[data-setting="theme"]').forEach((b) => { b.innerHTML = themeIcon(); b.title = `Theme: ${settings.theme}`; });
+  }));
   $('[data-act="logout"]', app).addEventListener('click', async () => {
     await api('POST', '/api/auth/logout').catch(() => {});
     location.hash = '#/login';
@@ -203,7 +232,7 @@ async function accountPage(params) {
   $$('[data-unlink]', app).forEach((b) => b.addEventListener('click', async () => {
     const id = b.dataset.unlink;
     if (!(await confirmDialog(`Unlink ${label[id]}?`, `You won't be able to sign in with ${label[id]} any more.`, 'Unlink', true))) return;
-    try { await api('DELETE', `/api/auth/identities/${id}`); toast(`${label[id]} unlinked`); accountPage(); } catch (e) { toast(e.message, 'error'); }
+    try { await api('DELETE', `/api/auth/identities/${id}`); toast(`${label[id]} unlinked`); settingsTab(); } catch (e) { toast(e.message, 'error'); }
   }));
   $('[data-act="password"]', app).addEventListener('click', async () => {
     const { value, form } = await dialog({
@@ -214,11 +243,11 @@ async function accountPage(params) {
       withForm: true,
     });
     if (value !== 'ok') return;
-    try { await api('POST', '/api/auth/password', form); toast('Password saved', 'ok'); accountPage(); } catch (e) { toast(e.message, 'error'); }
+    try { await api('POST', '/api/auth/password', form); toast('Password saved', 'ok'); settingsTab(); } catch (e) { toast(e.message, 'error'); }
   });
 }
 
-// ---------- home: course cards ----------
+// ---------- course tiles ----------
 // Question-type colours: categorical slots 1–6 in fixed order (validated light + dark), always shown with labels.
 const TYPE_COLORS = { single: 'var(--t-single)', multi: 'var(--t-multi)', judge: 'var(--t-judge)', fill: 'var(--t-fill)', calc: 'var(--t-calc)', short: 'var(--t-short)', essay: 'var(--t-essay)', term: 'var(--t-term)' };
 
@@ -264,20 +293,21 @@ function countdownPill(examDate) {
   return `<span class="pill ${days <= 3 ? 'urgent' : ''}" title="Exam on ${esc(examDate)}">${days === 0 ? 'Exam today' : days === 1 ? 'Exam tomorrow' : `Exam in ${days} days`}</span>`;
 }
 
-// Course list and course page draw from memory first and refresh in the background, so going Back paints the right
+// Course lists and the course page draw from memory first and refresh in the background, so going Back paints the right
 // page in the same frame (no flash of the page being left), and redraw only if the server copy differs.
 let coursesCache = null;
 
-async function home() {
+async function withCourses(draw) {
   const seq = routeSeq;
-  if (coursesCache) drawHome(coursesCache);
+  if (coursesCache) draw(coursesCache);
   const courses = await api('GET', '/api/courses');
   if (seq !== routeSeq) return;
-  if (!coursesCache || JSON.stringify(courses) !== JSON.stringify(coursesCache)) drawHome(courses);
+  if (!coursesCache || JSON.stringify(courses) !== JSON.stringify(coursesCache)) draw(courses);
   coursesCache = courses;
 }
 
 const GLOBE = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
+const FORK = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 12v5"/></svg>';
 const LOCK = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 
 /** Who a course belongs to and whether others see it, in one short line. */
@@ -286,29 +316,122 @@ function courseOwnerLine(c) {
   return c.owner ? `by ${esc(c.owner.username)}` : '';
 }
 
-function drawHome(courses) {
-  // kept deliberately light: numbers live on the Statistics page, not in the list
-  const tile = (c, showCount) => `<a class="course-tile" href="#/c/${enc(c.id)}" style="${courseColor(c.id)}">
-      <span class="ct-mono" aria-hidden="true">${esc([...String(c.name).trim()][0] || '·')}</span>
-      <span class="ct-name">${esc(c.name)}</span>
-      ${c.description ? `<span class="ct-desc">${esc(c.description)}</span>` : ''}
-      <span class="ct-meta">${courseOwnerLine(c)}${showCount ? ` · ${c.stats.total} q` : ''}</span>
-      ${countdownPill(c.examDate)}
-    </a>`;
-  // yours: the ones you own, plus public ones you have started; the rest of the public ones below
-  const started = (c) => c.stats.attempts || c.stats.exams || c.stats.starred;
-  const mine = courses.filter((c) => c.mine || started(c));
-  const others = courses.filter((c) => !mine.includes(c));
+// kept deliberately light: numbers live on the Statistics page, not in the lists
+/** A course description: its first line is the summary (cards, page header), the rest the public page's About text. */
+const summaryOf = (d) => String(d || '').trim().split('\n')[0].trim();
+const aboutOf = (d) => String(d || '').trim().split('\n').slice(1).join('\n').trim();
+
+const courseTile = (c, meta = courseOwnerLine(c), badge = countdownPill(c.examDate), href = `#/c/${enc(c.id)}`) => `<a class="course-tile" href="${href}" style="${courseColor(c.id)}">
+    <span class="ct-mono" aria-hidden="true">${esc([...String(c.name).trim()][0] || '·')}</span>
+    <span class="ct-name">${esc(c.name)}</span>
+    ${summaryOf(c.description) ? `<span class="ct-desc">${esc(summaryOf(c.description))}</span>` : ''}
+    <span class="ct-meta">${meta}</span>
+    ${badge}
+  </a>`;
+
+// ---------- Public tab: everyone's published courses, with a search ----------
+let publicQuery = '';
+
+function publicPage() {
+  return withCourses(drawPublic);
+}
+
+function drawPublic(courses) {
+  const pub = courses.filter((c) => c.visibility === 'public');
+  const forked = new Set(courses.filter((c) => c.mine && c.forkedFrom).map((c) => c.forkedFrom.id));
+  const hadFocus = document.activeElement?.classList.contains('course-search');
+  const meta = (c) => `${c.mine ? 'Yours' : c.owner ? `by ${esc(c.owner.username)}` : ''} · ${c.stats.total} q${c.forks ? ` · ${c.forks} fork${c.forks === 1 ? '' : 's'}` : ''}`;
+  app.innerHTML = `${topbar()}
+    <div class="page">
+      <div class="search-bar"><input type="search" class="course-search" placeholder="Search public courses" aria-label="Search public courses" enterkeyhint="search" value="${esc(publicQuery)}">
+        <button type="button" class="search-clear" data-act="clear-search" aria-label="Clear search" title="Clear" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button></div>
+      <div class="page-head"><h1>Public courses</h1></div>
+      <p class="muted small lead">Shared by everyone. Open one to see what's inside; fork it to practise with your own copy. Your own courses are practised under My courses.</p>
+      ${pub.length ? `<div class="course-tiles public-tiles">${pub.map((c) => courseTile(c, meta(c), forked.has(c.id) ? '<span class="pill">Forked</span>' : countdownPill(c.examDate), `#/p/${enc(c.id)}`)).join('')}</div>
+        <p class="muted no-match" hidden>No public course matches “<span></span>”.</p>`
+        : '<div class="card empty"><h2>No public courses yet</h2><p>When someone publishes a course, it shows up here. Publish one of yours from its page under My courses.</p></div>'}
+    </div>`;
+  const search = $('.course-search', app);
+  const filter = () => {
+    publicQuery = search.value;
+    const q = publicQuery.trim().toLowerCase();
+    let shownCount = 0;
+    $$('.public-tiles .course-tile', app).forEach((t, i) => {
+      t.hidden = !!q && !`${pub[i].name} ${pub[i].description || ''} ${pub[i].owner?.username || ''}`.toLowerCase().includes(q);
+      if (!t.hidden) shownCount++;
+    });
+    $('[data-act="clear-search"]', app).hidden = !publicQuery;
+    const none = $('.no-match', app);
+    if (none) { none.hidden = shownCount > 0; $('span', none).textContent = publicQuery.trim(); }
+  };
+  search.addEventListener('input', filter);
+  search.addEventListener('keydown', (e) => { if (e.key === 'Escape' && search.value) { e.preventDefault(); search.value = ''; filter(); } });
+  $('[data-act="clear-search"]', app).addEventListener('click', () => { search.value = ''; filter(); search.focus(); });
+  filter();
+  if (hadFocus) search.focus(); // a background refresh doesn't take the keyboard away
+}
+
+// ---------- In progress tab: every unfinished round, across courses ----------
+async function progressPage() {
+  const seq = routeSeq;
+  await flushAllSessions(); // rounds answered on this device reach the server before it is asked for the list
+  const rows = (await api('GET', '/api/sessions')).filter((r) => r.session.phase !== 'done');
+  if (seq !== routeSeq) return;
+  const answered = (s) => Object.values(s.entries || {}).filter((e) => e.submitted || e.response != null).length;
+  const status = (s) => {
+    const n = answered(s), total = s.qids.length;
+    if (s.phase === 'grading') return 'Handed in · short answers to grade';
+    return `${n} of ${total} answered${s.timeLimitSec ? ` · ${Math.round(s.timeLimitSec / 60)} min exam` : ''}`;
+  };
+  app.innerHTML = `${topbar()}
+    <div class="page narrow">
+      <div class="page-head"><h1>In progress</h1></div>
+      <p class="muted small lead">Unfinished practice rounds and mock exams, on every device you use. Tap one to carry on.</p>
+      ${rows.length ? `<ul class="rounds">${rows.map((r) => {
+        const s = r.session, pctDone = s.phase === 'grading' ? 100 : pct(answered(s), s.qids.length);
+        return `<li class="round" data-course="${esc(r.courseId)}" data-slot="${esc(r.slot)}" style="--c:${MODULE_COLORS[s.module] || MODULE_COLORS.practice}">
+          <a class="round-main" href="#/c/${enc(r.courseId)}/run/${enc(r.slot)}">
+            ${icon(ICONS[s.module] ? s.module : 'practice', 'round-ico')}
+            <span class="grow">
+              <b>${esc(s.title || MODULES[s.module]?.label || 'Practice')}</b>
+              <small class="muted">${esc(r.courseName)}${s.module === 'exam' ? ' · Mock exam' : ''}</small>
+              <span class="meter"><span style="width:${pctDone}%"></span></span>
+              <small class="muted">${status(s)} · ${s.startedAt ? `started ${relTime(new Date(s.startedAt).toISOString())}` : `saved ${relTime(r.updatedAt)}`}</small>
+            </span>
+            <span class="btn small primary round-go">Resume</span>
+          </a>
+          <button class="icon-btn round-del" data-act="delete-round" aria-label="Delete this round" title="Delete">${icon('trash')}</button>
+        </li>`;
+      }).join('')}</ul>` : `<div class="card empty"><h2>Nothing in progress</h2><p>Start a practice round or a mock exam from one of your courses; until you finish it, it waits here.</p><a class="btn primary" href="#/courses">My courses</a></div>`}
+    </div>`;
+  $$('[data-act="delete-round"]', app).forEach((b) => b.addEventListener('click', async () => {
+    const li = b.closest('.round');
+    const name = $('b', li).textContent;
+    if (!(await confirmDialog(`Delete “${name}”?`, 'The unfinished round is removed. Answers already submitted stay in your history and statistics.', 'Delete', true))) return;
+    sessions.clear(li.dataset.course, li.dataset.slot);
+    await flushAllSessions();
+    toast('Round deleted');
+    if (seq === routeSeq) progressPage();
+  }));
+}
+
+// ---------- My courses tab: the ones you own (your own and your forks) ----------
+function myCoursesPage() {
+  return withCourses(drawMine);
+}
+
+function drawMine(courses) {
+  const mine = courses.filter((c) => c.mine);
   app.innerHTML = `${topbar()}
     <div class="page">
       <div class="page-head">
-        <h1>Your courses</h1>
+        <h1>My courses</h1>
         <div class="actions-row"><a class="btn ghost" href="#/import">Import questions</a><button class="btn primary" data-act="new">+ New course</button></div>
       </div>
-      ${mine.length ? `<div class="course-tiles">${mine.map((c) => tile(c, false)).join('')}</div>` : `
+      ${mine.length ? `<div class="course-tiles">${mine.map((c) => courseTile(c)).join('')}</div>` : `
       <div class="card empty">
         <h2>No courses yet</h2>
-        <p>${others.length ? 'Pick a public course below and start practising, or make your own' : 'Create a course and import questions'}: paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
+        <p>Fork one from <a href="#/">Public</a> to practise it, or make your own: paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
         <ul class="tips">
           <li>“Find past exam papers for <i>Linear Algebra</i> and load them”</li>
           <li>“Load the questions from my vault notes in <i>Courses/Physics</i>”</li>
@@ -316,20 +439,8 @@ function drawHome(courses) {
         </ul>
         <button class="btn primary" data-act="new">+ New course</button>
       </div>`}
-      ${others.length ? `
-      <div class="page-head public-head">
-        <h2>Public courses</h2>
-        ${others.length > 6 ? '<input type="search" class="course-search" placeholder="Search public courses" aria-label="Search public courses">' : ''}
-      </div>
-      <p class="muted small">Shared by others. Practise them with your own private progress, or fork one to edit your own copy.</p>
-      <div class="course-tiles public-tiles">${others.map((c) => tile(c, true)).join('')}</div>` : ''}
     </div>`;
   $$('[data-act="new"]', app).forEach((b) => b.addEventListener('click', newCourseDialog));
-  const search = $('.course-search', app);
-  search?.addEventListener('input', () => {
-    const q = search.value.trim().toLowerCase();
-    $$('.public-tiles .course-tile', app).forEach((t, i) => { t.hidden = !!q && !`${others[i].name} ${others[i].description} ${others[i].owner?.username || ''}`.toLowerCase().includes(q); });
-  });
 }
 
 async function newCourseDialog() {
@@ -338,7 +449,7 @@ async function newCourseDialog() {
     body: `<label class="field"><span>Name</span><input name="name" required placeholder="e.g. Linear Algebra" autofocus></label>
       <label class="field"><span>Description</span><input name="description" placeholder="optional"></label>
       <label class="field"><span>Exam date</span><input name="examDate" type="date"></label>
-      <p class="hint">New courses are private. Publish one from its page when you want others to see it.</p>`,
+      <p class="hint">New courses are private.${auth.user?.isAdmin ? ' Publish one from its Settings when you want others to see it.' : ' Only an admin can publish courses.'}</p>`,
     buttons: [{ label: 'Cancel', value: null }, { label: 'Create', value: 'ok', primary: true }],
     withForm: true,
   });
@@ -347,7 +458,7 @@ async function newCourseDialog() {
     const c = await api('POST', '/api/courses', { name: form.name.trim(), description: form.description.trim() });
     if (form.examDate) await api('PATCH', `/api/courses/${enc(c.id)}`, { examDate: form.examDate });
     toast(`Created “${c.name}”`, 'ok');
-    navigate(`#/c/${enc(c.id)}/settings#import`);
+    navigate(`#/settings/c/${enc(c.id)}#import`);
   } catch (err) { toast(err.message, 'error'); }
 }
 
@@ -361,18 +472,33 @@ const ICONS = {
   stats: '<path d="M5 20v-8m6 8V5m6 15v-5M3 20h18"/>',
   settings: '<path d="M4 7h9m4 0h3M4 12h3m4 0h9M4 17h11m4 0h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>',
   chevron: '<path d="M9 5l7 7-7 7"/>',
+  trash: '<path d="M4 7h16M10 11v6m4-6v6M6 7l1 12.5h10L18 7M9 7V4.5h6V7"/>',
 };
+// each module keeps its own colour everywhere (ink flips to dark on the yellow tile)
+const MODULE_COLORS = { practice: '#2a78d6', mistakes: '#e34948', exam: '#6250d6', starred: '#eda100' };
 const icon = (name, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
 
+// a course you own: practice modules and statistics; anyone else's opens its public page
 async function coursePage(id) {
   const seq = routeSeq;
   const cached = peekCourse(id);
+  if (cached && !cached.course.access.isOwner) { navigate(`#/p/${enc(id)}`); return; }
   if (cached) drawCourse(id, cached);
   const fresh = await loadCourse(id, { force: true });
   if (seq !== routeSeq) return;
+  if (!fresh.course.access.isOwner) { navigate(`#/p/${enc(id)}`); return; }
   // only what this page shows; server-side stats are left out so they don't force a redraw
   const shown = (d) => JSON.stringify([d.course.name, d.course.description, d.course.examDate, d.course.visibility, d.course.access, d.course.forkedFrom, d.course.questions.length, d.progress, d.masteryStreak]);
   if (!cached || shown(cached) !== shown(fresh)) drawCourse(id, fresh);
+}
+
+/** The public page of a course (from the Public tab): what is in it, never the practice modules. */
+async function publicCoursePage(id) {
+  const seq = routeSeq;
+  const cached = peekCourse(id);
+  if (cached) drawCourseInfo(id, cached);
+  const [fresh] = await Promise.all([loadCourse(id, { force: true }), coursesCache || api('GET', '/api/courses').then((l) => { coursesCache = l; })]);
+  if (seq === routeSeq) drawCourseInfo(id, fresh); // lists your forks of it, so drawn again once the list is in
 }
 
 function drawCourse(id, data) {
@@ -388,60 +514,52 @@ function drawCourse(id, data) {
   const examReady = examConfigured(st);
   const base = `#/c/${enc(id)}`;
 
-  // each module keeps its own colour everywhere (ink flips to dark on the yellow tile)
   const tiles = [
-    { key: 'practice', title: 'Practice', info: `${practiceCount} questions`, n: practiceCount, color: '#2a78d6' },
-    { key: 'mistakes', title: 'Mistakes', info: mistakes ? `${mistakes} to review` : 'All clear', n: mistakes, color: '#e34948' },
+    { key: 'practice', title: 'Practice', info: `${practiceCount} questions`, n: practiceCount },
+    { key: 'mistakes', title: 'Mistakes', info: mistakes ? `${mistakes} to review` : 'All clear', n: mistakes },
     examReady
-      ? { key: 'exam', title: 'Mock exam', info: `${exam.questions} q · ${exam.timeMin ? `${exam.timeMin} min` : 'no limit'}`, n: exam.questions, color: '#6250d6' }
-      : { key: 'exam', title: 'Mock exam', info: 'Tap to set up', href: `${base}/settings#exam`, color: '#6250d6', unset: true },
-    { key: 'starred', title: 'Starred', info: starred ? `${starred} saved` : 'None yet', n: starred, color: '#eda100', on: '#2b1a00' },
-    { key: 'stats', title: 'Statistics', info: 'Progress & history', href: `${base}/stats`, color: '#1baf7a' },
-    { key: 'settings', title: 'Settings', info: 'Types, exam, import', href: `${base}/settings`, color: '#64748b' },
+      ? { key: 'exam', title: 'Mock exam', info: `${exam.questions} q · ${exam.timeMin ? `${exam.timeMin} min` : 'no limit'}`, n: exam.questions }
+      : { key: 'exam', title: 'Mock exam', info: 'Tap to set up', href: `#/settings/c/${enc(id)}#exam`, unset: true },
+    { key: 'starred', title: 'Starred', info: starred ? `${starred} saved` : 'None yet', n: starred, on: '#2b1a00' },
+    { key: 'stats', title: 'Statistics', info: 'Progress, accuracy, exam history', href: `${base}/stats`, color: '#1baf7a' },
   ];
   const tile = (t) => {
     // a module with an unfinished session says so; tapping it offers Resume / Start new
     const run = inProgress[t.key];
     const info = run && (run.answered || run.phase !== 'answering') ? `In progress · ${run.answered}/${run.qids.length}` : t.info;
-    const attrs = `class="mtile ${t.unset ? 'unset' : ''} ${run ? 'resumable' : ''}" data-mod="${t.key}" style="--c:${t.color};--on:${t.on || '#fff'}"`;
+    const attrs = `class="mtile ${t.unset ? 'unset' : ''} ${run ? 'resumable' : ''}" data-mod="${t.key}" style="--c:${t.color || MODULE_COLORS[t.key]};--on:${t.on || '#fff'}"`;
     const inner = `${icon(t.key, 'mtile-ico')}<span class="mtile-title">${t.title}</span><span class="mtile-info">${info}</span>`;
     return t.href
       ? `<a href="${t.href}" ${attrs}>${inner}</a>`
       : `<button type="button" ${attrs} data-start="${t.key}" ${t.n ? '' : 'aria-disabled="true"'}>${inner}</button>`;
   };
 
-  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › ${esc(course.name)}`)}
+  app.innerHTML = `${topbar(esc(course.name))}
     <div class="page">
       <section class="hero">
         <div class="hero-main">
           ${monogram(course.name, 'big', course.id)}
           <div class="hero-text">
             <h1>${esc(course.name)}</h1>
-            ${course.description ? `<p class="muted">${esc(course.description)}</p>` : ''}
-            <p class="course-meta">${courseOwnerLine(course)}${course.forkedFrom ? ` · forked from <a href="#/c/${enc(course.forkedFrom.id)}">${esc(course.forkedFrom.name)}</a>` : ''}</p>
+            ${summaryOf(course.description) ? `<p class="muted">${esc(summaryOf(course.description))}</p>` : ''}
+            <p class="course-meta">${stats.total} questions</p>
             ${countdownPill(course.examDate)}
           </div>
         </div>
-        <div class="hero-actions">
-          ${course.access.isOwner ? `<button class="btn small ${course.visibility === 'public' ? 'ghost' : 'primary'}" data-act="visibility">${course.visibility === 'public' ? `${LOCK}Make private` : `${GLOBE}Publish`}</button>`
-            : course.access.canManage ? `<button class="btn small ghost" data-act="visibility">${LOCK}Unpublish</button>` : ''}
-          <button class="btn small ghost" data-act="fork" title="Copy this course into your own private course to edit it">Fork</button>
-        </div>
+        <div class="hero-actions">${courseStatus(course)}</div>
       </section>
       ${drill ? `<div class="resume">
         <span class="resume-dot" aria-hidden="true"></span>
         <div class="grow"><b>${esc(drill.title)}</b> in progress<span class="muted"> · ${drill.answered} of ${drill.qids.length} answered · started ${relTime(new Date(drill.startedAt).toISOString())}</span></div>
         <div class="actions-row"><button class="btn ghost small" data-act="discard">Discard</button><a class="btn primary small" href="${base}/run/drill">Resume</a></div>
       </div>` : ''}
-      ${!stats.total ? `<div class="card empty"><h2>No questions yet</h2><p>Import a paper, notes, or a JSON bank to get started.</p><a class="btn primary" href="${base}/settings#import">Import questions</a></div>` : ''}
+      ${!stats.total ? `<div class="card empty"><h2>No questions yet</h2><p>Import a paper, notes, or a JSON bank to get started.</p><a class="btn primary" href="#/settings/c/${enc(id)}#import">Import questions</a></div>` : ''}
       <div class="mtiles">${tiles.slice(0, 4).map(tile).join('')}</div>
       <div class="mtiles tools-row">${tiles.slice(4).map(tile).join('')}</div>
     </div>`;
   $('[data-act="discard"]', app)?.addEventListener('click', async () => {
     if (await confirmDialog('Discard unfinished session?', 'Answers already submitted stay in your history.', 'Discard', true)) { sessions.clear(id, 'drill'); coursePage(id); }
   });
-  $('[data-act="visibility"]', app)?.addEventListener('click', () => toggleVisibility(data));
-  $('[data-act="fork"]', app)?.addEventListener('click', () => forkDialog(data));
   $$('[data-start]', app).forEach((b) => b.addEventListener('click', () => {
     if (b.getAttribute('aria-disabled') === 'true') {
       toast({ mistakes: 'No mistakes to review — nice!', starred: 'Tap ☆ on a question to save it here', practice: 'No questions match your Settings' }[b.dataset.start] || 'Nothing here yet', 'info');
@@ -449,6 +567,101 @@ function drawCourse(id, data) {
     }
     startSession(id, b.dataset.start);
   }));
+}
+
+/**
+ * A course's public page: what it is and what is in it. Practising happens elsewhere: on a fork of your own, or, for
+ * your own course, from My courses.
+ */
+function drawCourseInfo(id, data) {
+  const { course, progress, stats } = data;
+  const own = course.access.isOwner;
+  const about = aboutOf(course.description);
+  const forks = (coursesCache || []).filter((c) => c.mine && c.forkedFrom?.id === id);
+  const chapters = chapterStats(course, progress.questions);
+  const papers = pastPapers(course);
+  const exam = examSummary(progress.settings, stats.byType);
+  const samples = course.questions.slice(0, 3);
+  const forkBtn = (cls = '') => `<button class="btn primary ${cls}" data-act="fork">${forks.length ? 'Fork again' : 'Fork to practise'}</button>`;
+  app.innerHTML = `${topbar(esc(course.name))}
+    <div class="page narrow">
+      <section class="hero">
+        <div class="hero-main">
+          ${monogram(course.name, 'big', course.id)}
+          <div class="hero-text">
+            <h1>${esc(course.name)}</h1>
+            ${summaryOf(course.description) ? `<p class="muted">${esc(summaryOf(course.description))}</p>` : ''}
+            <p class="course-meta">${own ? `${courseOwnerLine(course)} · yours` : courseOwnerLine(course)} · ${stats.total} questions${course.updatedAt ? ` · updated ${relTime(course.updatedAt)}` : ''}${course.forkedFrom ? ` · forked from <a href="#/p/${enc(course.forkedFrom.id)}">${esc(course.forkedFrom.name)}</a>` : ''}</p>
+            ${countdownPill(course.examDate)}
+          </div>
+        </div>
+        ${own ? `<div class="hero-actions">${visibilityButton(course)}<a class="btn small ghost" href="#/settings/c/${enc(id)}#course">Edit details</a></div>`
+          : course.access.canManage ? `<div class="hero-actions">${visibilityButton(course)}<button class="btn small ghost danger-text" data-act="delete">Delete</button></div>` : ''}
+      </section>
+      ${own ? `<div class="resume">
+        <span class="resume-dot" aria-hidden="true"></span>
+        <div class="grow"><b>This is your course</b><span class="muted"> · this is how others see it; practise it under My courses</span></div>
+        <div class="actions-row"><a class="btn primary small" href="#/c/${enc(id)}" data-open-fork>Open in My courses</a></div>
+      </div>` : forks.length ? `<div class="resume">
+        <span class="resume-dot" aria-hidden="true"></span>
+        <div class="grow"><b>You have a copy</b><span class="muted"> · practise it under My courses</span></div>
+        <div class="actions-row">${forks.map((f) => `<a class="btn primary small" href="#/c/${enc(f.id)}" data-open-fork>Open ${forks.length > 1 ? `“${esc(f.name)}”` : 'my copy'}</a>`).join('')}</div>
+      </div>` : `<section class="card fork-cta">
+        <div class="grow"><h3>Fork to practise</h3>
+          <p class="muted small">Practice, a mistakes book, starred questions and mock exams run on your own copy: private to you, and yours to edit or add to.${stats.attempts ? ` Your ${stats.attempts} earlier answers on this course come along.` : ''}</p></div>
+        ${forkBtn('big')}
+      </section>`}
+      ${about ? `<section class="card about"><h3>About this course</h3><div class="prose">${md(about)}</div></section>`
+        : own ? `<section class="card about"><h3>About this course</h3><p class="muted small">No description yet. <a href="#/settings/c/${enc(id)}#course">Add one</a>: its first line is the summary on the course card, the lines after it show here.</p></section>` : ''}
+      <section class="card">
+        <h3>What's inside</h3>
+        ${stats.total ? `<div class="info-mix">${typeMix(stats.byType, stats.total)}</div>` : '<p class="muted">No questions yet.</p>'}
+        ${chapters.length > 1 ? `<h4>Chapters</h4><ul class="info-list">${chapters.map((c) => `<li><span class="grow">${esc(c.name || 'No chapter')}</span><span class="muted">${c.total} q</span></li>`).join('')}</ul>` : ''}
+        ${papers.length ? `<h4>Past papers</h4><ul class="info-list">${papers.map((p) => `<li><span class="grow">${esc(p.name)}</span><span class="muted">${p.questions.length} q</span></li>`).join('')}</ul>` : ''}
+        ${examConfigured(progress.settings) ? `<h4>Mock exam</h4><p class="muted small">${exam.questions} questions · ${exam.maxScore} points · ${exam.timeMin ? `${exam.timeMin} min` : 'no time limit'}${progress.settings.exam.tag ? ' · from past papers' : ''}</p>` : ''}
+      </section>
+      ${samples.length ? `<section class="card">
+        <h3>Sample questions</h3>
+        <ol class="preview-list">${samples.map((q) => `<li><span class="badge type">${esc(TYPE_LABELS[q.type])}</span> ${mdInline(q.stem.split('\n')[0].slice(0, 160))}</li>`).join('')}</ol>
+      </section>` : ''}
+    </div>`;
+  $$('[data-act="fork"]', app).forEach((b) => b.addEventListener('click', () => forkDialog(data)));
+  $$('[data-open-fork]', app).forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openUnderMyCourses(a.getAttribute('href').slice(1)); }));
+  $('[data-act="visibility"]', app)?.addEventListener('click', () => toggleVisibility(data));
+  $('[data-act="delete"]', app)?.addEventListener('click', () => deleteCourse(data));
+}
+
+/** Open one of your courses with My courses behind it (Back goes there, not to where you came from). */
+async function openUnderMyCourses(path) {
+  await navigate('#/courses');
+  navigate(path);
+}
+
+/** Delete a course (owner, or an admin for a public one): the bank and everyone's progress on it. */
+async function deleteCourse(data) {
+  const { course } = data;
+  if (!(await confirmDialog(`Delete “${course.name}”?`, `The question bank and all progress will be removed${data.learners ? `, including that of ${data.learners} other ${data.learners === 1 ? 'person' : 'people'}` : ''}.`, 'Delete', true))) return;
+  try {
+    await api('DELETE', `/api/courses/${enc(course.id)}`);
+  } catch (e) { toast(e.message, 'error'); return; }
+  sessions.clear(course.id);
+  invalidate(course.id);
+  coursesCache = null;
+  toast('Course deleted');
+  navigate(course.access.isOwner ? '#/courses' : '#/');
+}
+
+/** Where one of your courses stands: forked from a public course, published in Public, or private to you. */
+function courseStatus(course) {
+  if (course.forkedFrom) return `<a class="status-chip forked" href="#/p/${enc(course.forkedFrom.id)}" title="Open the original's public page">${FORK}<span>Forked from <b>${esc(course.forkedFrom.name)}</b></span></a>`;
+  if (course.visibility === 'public') return `<a class="status-chip public" href="#/p/${enc(course.id)}" title="Open its public page">${GLOBE}<span>In Public</span></a>`;
+  return `<span class="status-chip">${LOCK}<span>Private</span></span>`;
+}
+
+/** Publish / Make private, for the admin only (on their own courses; any public course can be taken down). */
+function visibilityButton(course) {
+  if (!auth.user?.isAdmin || !course.access.canManage) return '';
+  return `<button class="btn small ${course.visibility === 'public' ? 'ghost' : 'primary'}" data-act="visibility">${course.visibility === 'public' ? `${LOCK}${course.access.isOwner ? 'Make private' : 'Unpublish'}` : `${GLOBE}Publish`}</button>`;
 }
 
 /** Publish (everyone signed in sees it) or take a course private again. */
@@ -465,7 +678,7 @@ async function toggleVisibility(data) {
     invalidate(course.id);
     coursesCache = null;
     toast(going === 'public' ? 'Published: everyone can find it under Public courses' : 'Course is private now', 'ok');
-    if (course.access.isOwner) coursePage(course.id); else navigate('#/');
+    if (course.access.isOwner) route(); else navigate('#/'); // redraw the page it was changed from
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -485,8 +698,8 @@ async function forkDialog(data) {
   try {
     const c = await api('POST', `/api/courses/${enc(course.id)}/fork`, { name: form.name, withProgress: form.withProgress === 'on' });
     coursesCache = null;
-    toast(`Forked into “${c.name}”`, 'ok');
-    navigate(`#/c/${enc(c.id)}`);
+    toast(`Forked into “${c.name}”: it's under My courses`, 'ok');
+    openUnderMyCourses(`#/c/${enc(c.id)}`);
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -515,7 +728,7 @@ function chapterStats(course, prog) {
 async function startSession(id, module) {
   const data = await loadCourse(id, { force: true });
   const st = data.progress.settings;
-  if (module === 'exam' && !examConfigured(st)) { navigate(`#/c/${enc(id)}/settings#exam`); return; }
+  if (module === 'exam' && !examConfigured(st)) { navigate(`#/settings/c/${enc(id)}#exam`); return; }
   const qs = pickQuestions(data.course, data.progress, { ...moduleConfig(module, st), mastery: data.masteryStreak });
   if (!qs.length) { toast('No questions match the settings for this module', 'warn'); return; }
   // each module keeps its own unfinished session: offer to resume it rather than replace it
@@ -630,7 +843,7 @@ async function settingsPage(id) {
     return out;
   };
 
-  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › <a href="#/c/${enc(id)}">${esc(course.name)}</a> › Settings`)}
+  app.innerHTML = `${topbar(`<a href="#/settings">Settings</a> › ${esc(course.name)}`)}
     <div class="page narrow">
       <h1>⚙️ Settings</h1>
       <p class="muted">Choose what each module asks. Questions are always shuffled.
@@ -679,15 +892,16 @@ async function settingsPage(id) {
           <label class="field inline"><span>Duration (minutes, 0 = no limit)</span><input type="number" min="0" max="600" name="exam-time" value="${st.exam.timeMin || 90}"></label>
           <p class="exam-total"></p>
         </section>
-        <div class="settings-foot"><a class="btn ghost" href="#/c/${enc(id)}">Cancel</a><button class="btn primary big" type="submit">Save settings</button></div>
+        <div class="settings-foot"><a class="btn ghost" href="#/settings">Cancel</a><button class="btn primary big" type="submit">Save settings</button></div>
       </form>
 
       <h2 class="section-title">Course</h2>
       ${course.access.canEdit ? `<form class="card course-form" id="course">
         <label class="field"><span>Name</span><input name="name" value="${esc(course.name)}" required></label>
-        <label class="field"><span>Description</span><input name="description" value="${esc(course.description || '')}"></label>
+        <label class="field"><span>Description</span><textarea name="description" rows="6" placeholder="One-line summary&#10;&#10;More about the course: what it covers, where the questions come from, the paper's format…">${esc(course.description || '')}</textarea></label>
+        <p class="hint">The first line is the summary on course cards. The lines after it are the “About this course” text on its public page (Markdown works).</p>
         <label class="field"><span>Exam date</span><input name="examDate" type="date" value="${esc(course.examDate || '')}"></label>
-        <div class="actions-row"><button class="btn primary" type="submit">Save course</button></div>
+        <div class="actions-row"><button class="btn primary" type="submit">Save course</button>${visibilityButton(course)}</div>
       </form>
       <section class="card" id="import"></section>` : `<section class="card" id="course">
         <h3>${courseOwnerLine(course)}</h3>
@@ -706,6 +920,7 @@ async function settingsPage(id) {
     </div>`;
 
   $('[data-act="fork"]', app)?.addEventListener('click', () => forkDialog(data));
+  $('[data-act="visibility"]', app)?.addEventListener('click', () => toggleVisibility(data));
   $('form.course-form', app)?.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -715,15 +930,7 @@ async function settingsPage(id) {
       toast('Course saved', 'ok');
     } catch (err) { toast(err.message, 'error'); }
   });
-  $('[data-act="delete"]', app)?.addEventListener('click', async () => {
-    if (!(await confirmDialog(`Delete “${course.name}”?`, `The question bank and all progress will be removed${data.learners ? `, including that of ${data.learners} other ${data.learners === 1 ? 'person' : 'people'}` : ''}.`, 'Delete', true))) return;
-    await api('DELETE', `/api/courses/${enc(id)}`);
-    sessions.clear(id);
-    invalidate(id);
-    coursesCache = null;
-    toast('Course deleted');
-    navigate('#/');
-  });
+  $('[data-act="delete"]', app)?.addEventListener('click', () => deleteCourse(data));
   if (course.access.canEdit) importPanel($('#import', app), id, () => { if (seq === routeSeq) settingsPage(id); }); // only redraw if still on this page
 
   const form = $('form.settings', app);
@@ -798,7 +1005,7 @@ async function statsPage(id) {
   const chapters = chapterStats(course, prog);
   const exams = progress.exams.slice().reverse();
   const accRow = (name, v) => `<tr><td>${esc(name)}</td><td>${v.answered}/${v.total}</td><td>${v.attempts ? pct(v.correct, v.attempts) + '%' : '—'}</td><td><div class="bar ${v.attempts && v.correct / v.attempts < 0.6 ? 'low' : ''}"><span style="width:${v.attempts ? pct(v.correct, v.attempts) : 0}%"></span></div></td></tr>`;
-  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › <a href="#/c/${enc(id)}">${esc(course.name)}</a> › Statistics`)}
+  app.innerHTML = `${topbar(`<a href="#/c/${enc(id)}">${esc(course.name)}</a> › Statistics`)}
     <div class="page narrow">
       <h1>📊 Statistics</h1>
       <section class="card overview">
@@ -1016,7 +1223,7 @@ function previewHtml(r, filename) {
 async function importPage(params) {
   const courses = (await api('GET', '/api/courses')).filter((c) => c.mine); // only your own courses take imports
   const pre = params?.get?.('course');
-  app.innerHTML = `${topbar(`<a href="#/">Courses</a> › Import`)}
+  app.innerHTML = `${topbar(`<a href="#/courses">My courses</a> › Import`)}
     <div class="page narrow">
       <h1>Import questions</h1>
       <section class="card">
@@ -1056,7 +1263,7 @@ async function printPage(id) {
       ${q.type === 'calc' || isOpen(q.type) ? '<div class="answer-space"></div>' : ''}</div>`;
   }).join('')}</section>`).join('');
   app.innerHTML = `<div class="paper">
-    <div class="no-print actions-row"><a class="btn ghost" href="#/c/${enc(id)}/settings">‹ Back</a><button class="btn primary" onclick="window.print()">🖨 Print</button></div>
+    <div class="no-print actions-row"><a class="btn ghost" href="#/settings/c/${enc(id)}">‹ Back</a><button class="btn primary" onclick="window.print()">🖨 Print</button></div>
     <h1>${esc(course.name)}</h1>
     ${body}
     <section class="paper-key"><h2>Answer key</h2><ol>${numbered.map(([i, q]) => `<li value="${i}">${isOpen(q.type) ? md(q.answer) : mdInline(answerText(q))}</li>`).join('')}</ol></section>

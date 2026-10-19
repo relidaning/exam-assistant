@@ -1,5 +1,6 @@
 // Small DOM + API helpers shared by all views.
 import { escapeHtml } from './render.js';
+import { tabOf } from './nav.js';
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -124,9 +125,24 @@ export function themeIcon() {
   return `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">${paths[settings.theme]}</svg>`;
 }
 
+// the four main tabs: a bar at the bottom on phones, inside the top bar on wide screens
+const TAB_ITEMS = [
+  ['/', 'Public', '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17M12 3.5a13 13 0 0 0 0 17"/>'],
+  ['/progress', 'In progress', '<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5v7l5.5-3.5z"/>'],
+  ['/courses', 'My courses', '<path d="M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3z"/><path d="M5 16.5a3 3 0 0 1 3-3h10.5M9 8.5h6"/>'],
+  ['/settings', 'Settings', '<path d="M4 7h9m4 0h3M4 12h3m4 0h9M4 17h11m4 0h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>'],
+];
+
+export function tabbar() {
+  const active = tabOf(location.hash);
+  return `<nav class="tabbar" aria-label="Main">${TAB_ITEMS.map(([path, label, ico]) => `<a href="#${path}" class="tab" ${path === active ? 'aria-current="page"' : ''}>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ico}</svg><span>${label}</span></a>`).join('')}</nav>`;
+}
+
 export function topbar(crumbs = '') {
-  return `<header class="topbar">
+  return `<header class="topbar has-tabs">
     <a class="brand" href="#/"><span class="logo" aria-hidden="true">✎</span><span>Exam Assistant</span></a>
+    ${tabbar()}
     <div class="crumbs">${crumbs}</div>
     <div class="topbar-tools">
       <button class="icon-btn" data-setting="theme" title="Theme: ${settings.theme}" aria-label="Toggle theme">${themeIcon()}</button>

@@ -248,6 +248,7 @@ const routes = [
     };
   }],
   // unfinished rounds, shared by every browser and device of the user
+  ['GET', /^\/api\/sessions$/, (req, user) => store.listSessions(user.id)],
   ['GET', /^\/api\/courses\/([^/]+)\/sessions$/, (req, user, [id]) => { view(id, user); return store.getSessions(id, user.id); }],
   ['PUT', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, async (req, user, [id, slot]) => { view(id, user); return store.saveSession(id, user.id, slot, await readBody(req)); }],
   ['DELETE', /^\/api\/courses\/([^/]+)\/sessions\/([^/]+)$/, (req, user, [id, slot]) => { view(id, user); store.deleteSession(id, user.id, slot); return { ok: true }; }],
@@ -256,8 +257,8 @@ const routes = [
     const patch = await readBody(req);
     const a = view(id, user);
     if (['name', 'description', 'examDate'].some((k) => patch[k] !== undefined)) edit(id, user);
-    // anyone who manages a course may take it down; only its owner puts it up
-    if (patch.visibility !== undefined && !(patch.visibility === 'public' ? a.isOwner : a.canManage)) throw store.httpError(403, 'Only the owner can publish this course');
+    // publishing and unpublishing are the admin's: their own courses up or down, anyone's public course down
+    if (patch.visibility !== undefined && !(user.isAdmin && (patch.visibility === 'public' ? a.isOwner : a.canManage))) throw store.httpError(403, 'Only an admin can publish or unpublish courses');
     return store.updateCourse(id, patch);
   }],
   ['DELETE', /^\/api\/courses\/([^/]+)$/, (req, user, [id]) => { manage(id, user); store.deleteCourse(id); return { ok: true }; }],

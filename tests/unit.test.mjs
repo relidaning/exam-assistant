@@ -461,6 +461,9 @@ test('HTTP API round trip', async () => {
     await call('PUT', `/api/courses/${encodeURIComponent(id)}/sessions/exam`, { ...round, slot: 'exam' });
     await call('DELETE', `/api/courses/${encodeURIComponent(id)}/sessions/exam`);
     assert.deepEqual(Object.keys((await call('GET', `/api/courses/${encodeURIComponent(id)}/sessions`)).body), ['practice']);
+    const everywhere = (await call('GET', '/api/sessions')).body;
+    assert.deepEqual(everywhere.map((r) => [r.courseId, r.courseName, r.slot]), [[id, '数据结构', 'practice']], 'every course\'s rounds in one list');
+    assert.deepEqual(everywhere[0].session, round);
     await call('POST', `/api/courses/${encodeURIComponent(id)}/reset-progress`);
     assert.deepEqual((await call('GET', `/api/courses/${encodeURIComponent(id)}/sessions`)).body, {}, 'a progress reset drops unfinished rounds');
     assert.equal((await call('GET', `/api/courses/${encodeURIComponent(id)}`)).body.progress.settings.exam.timeMin, 45, 'settings survive a progress reset');
@@ -508,8 +511,11 @@ test('accounts: private progress, public courses, publish, fork', async () => {
     assert.equal((await bob('POST', `/api/courses/${c.id}/attempt`, { qid: 'x', correct: true })).status, 404);
     assert.equal((await bob('PATCH', `/api/courses/${c.id}`, { visibility: 'public' })).status, 404);
 
+    // only an admin publishes: ann (not one) can't put her course up; here it is published behind the API's back
+    assert.equal((await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'public' })).status, 403, 'publishing is for admins');
+    assert.equal(store.updateCourse(c.id, { visibility: 'public' }).visibility, 'public');
+
     // published: bob sees it, practises it with his own progress and settings, but can't edit it
-    assert.equal((await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'public' })).body.visibility, 'public');
     const listed = (await bob('GET', '/api/courses')).body.find((x) => x.id === c.id);
     assert.deepEqual([listed.mine, listed.owner.username, listed.stats.total], [false, 'ann', 2]);
     const view = (await bob('GET', `/api/courses/${c.id}`)).body;
@@ -521,6 +527,7 @@ test('accounts: private progress, public courses, publish, fork', async () => {
     await bob('POST', `/api/courses/${c.id}/flag`, { qid: q2, starred: true, note: 'bob only' });
     await bob('POST', `/api/courses/${c.id}/exam`, { title: 'P', total: 2, score: 1, maxScore: 2, correct: 1 });
     await bob('PUT', `/api/courses/${c.id}/sessions/practice`, { qids: [q1], entries: {} });
+    assert.deepEqual((await ann('GET', '/api/sessions')).body.filter((r) => r.courseId === c.id), [], "bob's rounds are not in ann's list");
     await bob('PUT', `/api/courses/${c.id}/settings`, { exam: { perType: { single: 1 }, timeMin: 5 } });
     const annSees = (await ann('GET', `/api/courses/${c.id}`)).body;
     assert.deepEqual([annSees.progress.questions[q1].correct, annSees.progress.questions[q1].wrong, annSees.progress.questions[q2], annSees.progress.exams.length, annSees.sessions],
@@ -555,14 +562,17 @@ test('accounts: private progress, public courses, publish, fork', async () => {
     assert.equal((await bob('PATCH', `/api/courses/${fork.id}`, { name: 'Bank, fixed' })).status, 200);
     assert.equal((await bob('POST', `/api/courses/${fork.id}/import`, { content: JSON.stringify([{ stem: 'q3', answer: 'yes' }]) })).body.added, 1);
     assert.equal((await ann('GET', `/api/courses/${c.id}`)).body.course.questions.length, 2, 'the original is untouched');
-    assert.equal((await bob('PATCH', `/api/courses/${fork.id}`, { visibility: 'public' })).status, 200);
+    assert.equal((await bob('PATCH', `/api/courses/${fork.id}`, { visibility: 'public' })).status, 403, 'nor can bob publish his fork');
+    store.updateCourse(fork.id, { visibility: 'public' });
     assert.equal((await ann('GET', '/api/courses')).body.find((x) => x.id === fork.id).owner.username, 'bob', 'a published fork shows up for everyone');
     assert.equal((await bob('POST', `/api/courses/${fork.id}/fork`, {})).body.id !== fork.id, true, 'forking your own course makes another copy');
 
     // ann takes hers private again: bob loses access, his progress stays for when it comes back
-    await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'private' });
+    assert.equal((await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'private' })).status, 403, 'or take it down');
+    store.updateCourse(c.id, { visibility: 'private' });
     assert.equal((await bob('GET', `/api/courses/${c.id}`)).status, 404);
-    await ann('PATCH', `/api/courses/${c.id}`, { visibility: 'public' });
+    assert.ok(!(await bob('GET', '/api/sessions')).body.some((r) => r.courseId === c.id), "rounds of a course you can't see any more are not listed");
+    store.updateCourse(c.id, { visibility: 'public' });
     assert.equal((await bob('GET', `/api/courses/${c.id}`)).body.progress.questions[q1].wrong, 1);
 
     // the admin (first account in this data dir) may take down anyone's public course, but not edit it
@@ -701,4 +711,20 @@ test('Google/GitHub sign-in: new account, same account next time, linking, forge
     server.close();
     fake.close();
   }
+});
+
+test('a stray sign-in account folds into the real one', () => {
+  const real = store.createUser({ username: 'merge-real', password: 'secret1' });
+  const stray = store.createIdentityUser('github', { subject: 'merge-777', login: 'merge-stray' });
+  const token = store.createLogin(stray.id);
+  const busy = store.createIdentityUser('google', { subject: 'merge-888', login: 'merge-busy' });
+  const c = store.createCourse({ name: 'Merge Busy', ownerId: busy.id });
+  store.importQuestions(c.id, [{ stem: 'q', options: ['a', 'b'], answer: 'A' }]);
+  store.recordAttempt(c.id, busy.id, { qid: store.getCourse(c.id).questions[0].id, correct: true });
+  assert.throws(() => store.mergeAccount(busy.id, real.id), /own progress/, 'an account with progress is not merged');
+  assert.throws(() => store.mergeAccount(real.id, real.id), /two different/);
+  assert.deepEqual(store.mergeAccount(stray.id, real.id), { identities: 1, courses: 0 });
+  assert.equal(store.userForIdentity('github', 'merge-777').id, real.id, 'its GitHub now signs in to the real account');
+  assert.ok(!store.getUser(stray.id));
+  assert.ok(!store.userForToken(token), 'and its sign-ins are gone');
 });

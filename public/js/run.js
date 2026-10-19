@@ -505,7 +505,7 @@ export async function renderResult(root, courseId, slot) {
     : `<div class="score-big"><b>${acc}%</b></div><p class="muted">${sum.correct} of ${attempted} answered correctly${attempted < ids.length ? ` (${ids.length - attempted} skipped)` : ''} · ${fmtDuration(sum.durationSec)}</p>`;
   const rows = Object.entries(sum.byType).map(([t, v]) => `<tr><td>${esc(TYPE_LABELS[t])}</td><td>${v.correct}/${v.total}</td>${isExam ? `<td>${v.score}/${v.maxScore}</td>` : ''}<td><div class="bar"><span style="width:${pct(v.correct, v.total)}%"></span></div></td></tr>`).join('');
   root.innerHTML = `
-    ${topbar(`<a href="#/">Courses</a> › <a href="#/c/${encodeURIComponent(courseId)}">${esc(data.course.name)}</a> › Results`)}
+    ${topbar(`<a href="#/c/${encodeURIComponent(courseId)}">${esc(data.course.name)}</a> › Results`)}
     <div class="page narrow">
       <section class="card result-card">
         <h2>${esc(s.title)} — done</h2>
