@@ -104,24 +104,50 @@ async function loginPage(params) {
   const error = params?.get?.('error') || '';
   const providers = auth.providers || [];
   const draw = () => {
-    app.innerHTML = `${topbar()}
-      <div class="page login-page">
-        <form class="card login-card" autocomplete="on">
-          <span class="logo big" aria-hidden="true">✎</span>
-          <h1>${mode === 'login' ? 'Sign in' : 'Create your account'}</h1>
-          ${auth.firstUser ? `<p class="muted small">You're the first one here. This account becomes the admin and takes over the existing courses and progress.</p>`
-            : `<p class="muted small">${mode === 'login' ? 'Your progress is private to your account.' : 'Practise public courses, make your own, and publish them for others.'}</p>`}
-          ${providers.length ? `<div class="oauth-buttons">${providers.map((p) => `<a class="btn oauth-btn" href="${providerHref(p.id, { next })}">${PROVIDER_ICONS[p.id] || ''}Continue with ${esc(p.label)}</a>`).join('')}</div>
-          <div class="or-line" role="separator"><span>or with a username</span></div>` : ''}
-          <label class="field"><span>Username</span><input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" spellcheck="false" ${providers.length ? '' : 'autofocus'}></label>
-          <label class="field"><span>Password</span><input name="password" type="password" required minlength="${mode === 'login' ? 1 : 6}" autocomplete="${mode === 'login' ? 'current-password' : 'new-password'}"></label>
-          ${mode === 'register' ? '<p class="hint">At least 6 characters.</p>' : ''}
+    const reg = mode === 'register';
+    // no top bar: a brand header (a side panel on wide screens) and the form
+    app.innerHTML = `<div class="login">
+        <header class="login-brand">
+          <div class="login-brand-top">
+            <span class="login-logo" aria-hidden="true">✎</span><span class="login-name">Exam Assistant</span>
+            <button class="icon-btn login-theme" data-setting="theme" title="Theme: ${settings.theme}" aria-label="Toggle theme">${themeIcon()}</button>
+          </div>
+          <p class="login-tagline">Practise past papers, review your mistakes, sit mock exams.</p>
+          <ul class="login-points">
+            <li>Your progress stays private to your account</li>
+            <li>Practise public courses, or fork one to make it yours</li>
+            <li>Same round on your phone and your computer</li>
+          </ul>
+        </header>
+        <form class="login-card" autocomplete="on">
+          ${auth.firstUser ? '<h1>Create the first account</h1>' : `<div class="login-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected="${!reg}" ${reg ? 'data-act="switch"' : ''}>Sign in</button>
+            <button type="button" role="tab" aria-selected="${reg}" ${reg ? '' : 'data-act="switch"'}>Create account</button>
+          </div>`}
+          ${auth.firstUser ? '<p class="login-note">You\'re the first one here. This account becomes the admin and takes over the existing courses and progress.</p>' : ''}
+          ${providers.length ? `<div class="oauth-buttons">${providers.map((p) => `<a class="btn oauth-btn" href="${providerHref(p.id, { next })}" aria-label="Continue with ${esc(p.label)}">${PROVIDER_ICONS[p.id] || ''}<span>${esc(p.label)}</span></a>`).join('')}</div>
+          <div class="or-line" role="separator"><span>or</span></div>` : ''}
+          <label class="login-field"><span>Username</span>
+            <input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
+          <label class="login-field"><span>Password${reg ? ' <small>at least 6 characters</small>' : ''}</span>
+            <span class="pw-wrap"><input name="password" type="password" required minlength="${reg ? 6 : 1}" autocomplete="${reg ? 'new-password' : 'current-password'}" enterkeyhint="go">
+            <button type="button" class="pw-toggle" data-act="show-pw" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
           <p class="error-text small login-error" role="alert">${esc(error)}</p>
-          <button class="btn primary big" type="submit">${mode === 'login' ? 'Sign in' : 'Create account'}</button>
-          ${auth.firstUser ? '' : `<p class="muted small login-switch">${mode === 'login' ? 'New here?' : 'Have an account?'} <button type="button" class="link-btn" data-act="switch">${mode === 'login' ? 'Create an account' : 'Sign in'}</button></p>`}
+          <button class="btn primary big" type="submit">${reg ? 'Create account' : 'Sign in'}</button>
         </form>
       </div>`;
-    $('[data-act="switch"]', app)?.addEventListener('click', () => { mode = mode === 'login' ? 'register' : 'login'; draw(); });
+    $('[data-act="show-pw"]', app).addEventListener('click', (e) => {
+      const b = e.currentTarget, input = b.previousElementSibling, show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      b.setAttribute('aria-pressed', show);
+      b.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+    });
+    $('[data-act="switch"]', app)?.addEventListener('click', () => {
+      const typed = $('input[name="username"]', app).value;
+      mode = mode === 'login' ? 'register' : 'login';
+      draw();
+      $('input[name="username"]', app).value = typed; // keep what was typed
+    });
     $('form', app).addEventListener('submit', async (e) => {
       e.preventDefault();
       const body = Object.fromEntries(new FormData(e.target));
