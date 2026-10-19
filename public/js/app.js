@@ -125,8 +125,6 @@ async function loginPage(params) {
             <button type="button" role="tab" aria-selected="${reg}" ${reg ? '' : 'data-act="switch"'}>Create account</button>
           </div>`}
           ${auth.firstUser ? '<p class="login-note">You\'re the first one here. This account becomes the admin and takes over the existing courses and progress.</p>' : ''}
-          ${providers.length ? `<div class="oauth-buttons">${providers.map((p) => `<a class="btn oauth-btn" href="${providerHref(p.id, { next })}" aria-label="Continue with ${esc(p.label)}">${PROVIDER_ICONS[p.id] || ''}<span>${esc(p.label)}</span></a>`).join('')}</div>
-          <div class="or-line" role="separator"><span>or</span></div>` : ''}
           <label class="login-field"><span>Username</span>
             <input name="username" required minlength="2" maxlength="32" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next"></label>
           <label class="login-field"><span>Password${reg ? ' <small>at least 6 characters</small>' : ''}</span>
@@ -134,6 +132,8 @@ async function loginPage(params) {
             <button type="button" class="pw-toggle" data-act="show-pw" aria-label="Show password" aria-pressed="false"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span></label>
           <p class="error-text small login-error" role="alert">${esc(error)}</p>
           <button class="btn primary big" type="submit">${reg ? 'Create account' : 'Sign in'}</button>
+          ${providers.length ? `<div class="or-line" role="separator"><span>or continue with</span></div>
+          <div class="oauth-buttons">${providers.map((p) => `<a class="btn oauth-btn" href="${providerHref(p.id, { next })}" aria-label="Continue with ${esc(p.label)}">${PROVIDER_ICONS[p.id] || ''}<span>${esc(p.label)}</span></a>`).join('')}</div>` : ''}
         </form>
       </div>`;
     $('[data-act="show-pw"]', app).addEventListener('click', (e) => {
