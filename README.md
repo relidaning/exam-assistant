@@ -47,7 +47,8 @@ finishes at that address, so open the app there.
   above. A LAN address like `http://192.168.1.7:8710` works.
 - **Google**: Google Cloud console → APIs & Services → Credentials → Create OAuth client ID (Web application), with
   the callback as an authorized redirect URI. Google accepts only `localhost` or a real domain (for example an HTTPS
-  name from a reverse proxy or Tailscale), not a LAN IP, so on a phone over the LAN use GitHub or the password.
+  name from a reverse proxy or Tailscale), not a LAN IP, so on a phone over the LAN use GitHub or the password. With a `localhost` address, the Google button
+  shows only in a browser on the server machine.
 
 Accounts are matched by the provider's user id, never by email; joining a Google/GitHub account to an existing one
 only happens by linking it from the Account page while signed in.

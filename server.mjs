@@ -188,7 +188,7 @@ async function oauthCallback(req, res, user, provider) {
 
 const authRoutes = [
   ['GET', /^\/api\/auth\/me$/, (req, res, user) => ({
-    user, firstUser: !user && store.userCount() === 0, providers: oauth.enabledProviders(),
+    user, firstUser: !user && store.userCount() === 0, providers: oauth.enabledProviders(req.headers.host),
     ...(user ? { identities: store.identitiesOf(user.id) } : {}),
   })],
   ['GET', /^\/api\/auth\/oauth\/(google|github)\/start$/, (req, res, user) => oauthStart(req, res, user, /\/oauth\/(\w+)\//.exec(req.url)[1])],

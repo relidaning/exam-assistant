@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-19 — Google sign-in prep
+GitHub sign-in is configured (`data/oauth.json`, publicUrl `http://192.168.255.6:8710`, which is the WireGuard address). Google won't accept a LAN IP as a redirect URI, so it gets its own `publicUrl` of `http://localhost:8710`. A provider registered at a loopback address is now offered only to browsers on the server machine (`enabledProviders(requestHost)`), so phones don't get a button that can't work. Accounts: `lidaning` (admin, password) and `relidaning`, a separate account made by the first GitHub sign-in with no progress; it should be merged into `lidaning` if the user agrees.
+
 ## 2026-10-19 — Login page redesign
 The sign-in page has its own layout now, with no app top bar. On phones an amber brand header (logo, name, theme toggle, tagline) sits over a form sheet with rounded top corners. On wide screens (≥ 860 px) it's a two-panel card, with the brand panel adding three feature points. Sign in / Create account is a tab switch at the top (it keeps the typed username), Google and GitHub sit side by side, the password has a show/hide button, fields are 16 px (no iOS zoom), and safe-area insets are respected. Phones held sideways get a one-line header with the content kept to a 480 px column. The first-account notice is an amber box. The selected tab is tinted amber, because a surface-coloured tab didn't show up in dark mode. Checked at 360/390 px, dark, landscape and desktop with no horizontal overflow; e2e and unit tests pass.
 

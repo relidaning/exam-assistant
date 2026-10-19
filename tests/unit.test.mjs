@@ -687,11 +687,17 @@ test('Google/GitHub sign-in: new account, same account next time, linking, forge
     assert.equal(store.verifyUser('octo-cat', 'newpass1')?.id, octo.user.id);
     assert.notEqual((await me((await signInWith('octo')).session)).user.id, octo.user.id, 'once unlinked, that GitHub user gets a fresh account');
 
+    process.env.GITHUB_PUBLIC_URL = 'http://localhost:8710';
+    assert.deepEqual(oauth.enabledProviders('192.168.1.7:8710'), [], 'a provider registered at localhost is not offered on other addresses');
+    assert.equal(oauth.enabledProviders('localhost:8710').length, 1, 'but is on this machine');
+    assert.equal((await me()).providers.length, 1, '(127.0.0.1 is this machine too)');
+    delete process.env.GITHUB_PUBLIC_URL;
     delete process.env.GITHUB_CLIENT_ID;
     assert.match((await get('/api/auth/oauth/github/start')).headers.get('location'), /error=.*not%20set%20up/);
   } finally {
     delete process.env.GITHUB_CLIENT_ID;
     delete process.env.GITHUB_CLIENT_SECRET;
+    delete process.env.GITHUB_PUBLIC_URL;
     server.close();
     fake.close();
   }
