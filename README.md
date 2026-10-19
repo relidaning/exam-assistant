@@ -1,0 +1,79 @@
+# Exam Assistant
+
+A local practice app for upcoming tests. Questions are organized by **course → module → question type**. Each
+question type gets an answer UI that fits it.
+
+```bash
+npm install
+npm run demo     # optional: sample course with every question type
+npm start        # http://localhost:8710  (also printed: the LAN address for your phone/tablet)
+```
+
+## Flow
+
+1. **Pick a course.** The list is kept simple: each card has the course name, description and exam countdown.
+   The numbers are on the Statistics page.
+2. **Pick a module**. The course page holds only the modules. Questions always come in random order. Each module
+   keeps its own unfinished session: its tile shows "In progress · 12/215", and tapping it offers Resume or Start new.
+   Starting one module never discards another's progress.
+   - **Practice**: instant feedback after each question.
+   - **Mistakes**: every question you got wrong. A question leaves after 3 correct answers in a row, or when you
+     remove it by hand.
+   - **Mock exam**: timed, with no feedback until you hand in. Its badge shows the setup: question types, counts,
+     points and duration. You grade short answers against the reference, then get a score and its history.
+   - **Starred**: your bookmarks.
+   - **Statistics**: all the numbers. That's how much you've practiced, your accuracy, how many questions are
+     waiting for review, your best mock exam and the mix of question types. It also has accuracy by type and by chapter, an exam score trend, and your most-missed questions.
+   - **Settings**: the course's name, description and exam date, importing more questions, export, printing and
+     deleting the course. It also sets which chapters every module draws from, which question types Practice and Mistakes use, and how
+     many questions there are per session. Also the mock exam setup: questions and points per type, and duration.
+     Settings are stored on the server, so your phone and desktop share them.
+3. **Answer.** The input fits each question type:
+
+| Type | How you answer |
+|---|---|
+| Single choice | tap an option (or press A–D / 1–4); it submits right away |
+| Multiple choice | toggle options, then submit; picking only correct ones but not all earns partial credit |
+| True / False | two big buttons (T / F) |
+| Fill in the blank | inline inputs inside the sentence; Enter moves to the next blank; full-width, case and numeric variants are accepted |
+| Calculation | one input per part, with units. Accepts expressions (`1/3`, `2*sqrt(2)`, `pi/4`, `1.2e-3`) with a live preview. Includes a keypad and a scratch pad. Tolerance is set per question, ±1 % by default |
+| Short answer | free text, then the reference answer with its key points highlighted, then you grade yourself |
+
+Everywhere: LaTeX math (KaTeX, with mhchem for chemistry), images (tap to zoom), audio and video, and Markdown tables
+and code. You can star questions and keep notes on them. If a question was read wrongly from your notes, the **Re-parse** button under the question (or press P) opens its original
+source text. Fix the text, or load the note's current version if you've corrected the note, check the preview,
+and save. Your progress on the question is kept. A small **Verify** button next to Submit/Next (or press G) opens a
+Google search for the question in a new tab, so you can double-check an answer. It's hidden while you're answering a mock exam. The keyboard works throughout (←/→, Enter, S to star, P to re-parse, M for
+the question list; in practice Ctrl+Enter submits, or shows the answer when you leave it blank — counted as wrong; Y/P/N grade a
+short answer as got it / partly / missed it and move on to the next question), and you can swipe between questions on touch screens. Sessions resume after a reload, and
+are kept on the server, so another device or address (localhost vs. the LAN IP) opens the same round.
+
+## Responsive and media
+
+The layout adapts from phones (bottom action bar, bottom-sheet question list, large touch targets, safe-area
+insets) to tablets and desktops (a side navigator panel). It supports light and dark themes and reduced motion. You can install it on a phone's home screen as a PWA, and Settings can produce a
+printable paper with an answer key.
+
+## Getting questions in
+
+- **Ask Claude** (Claude Code in this folder):
+  - "find past papers for *Signals and Systems* and load them"
+  - "load the questions in my vault folder *1_Math/Calculus*"
+  - "add these questions to *Economics*: …"
+
+  See `.claude/skills/exam-import/SKILL.md`.
+- **In the app**: a course's Settings → Import, or **Import questions** on the course list. Paste text or drop `.md` / `.txt` / `.json` files, preview them, then import.
+- **CLI**: `npm run import -- --course "Linear Algebra" notes/*.md`
+
+The format is forgiving: numbered questions, `A. B. C. D.` options (on one line or several), `Answer:` or `答案：`,
+`Explanation:` or `解析：`, section headings such as `一、单项选择题`, Obsidian `![[image.png]]` embeds, `- [x]`
+checkboxes and `{{cloze}}` blanks. The full reference is in [docs/FORMAT.md](docs/FORMAT.md).
+
+## Data
+
+Everything is stored in one SQLite file, `data/exam.db`: question banks, every answer you give (with its time),
+stars, notes, mock exam results and settings. Images and audio go in `data/media/<course>/`. It's written as you go,
+so restarting the app loses nothing.
+
+- `npm run backup` writes a snapshot to `data/backups/` and keeps the newest 30. It's safe while the app is running.
+- You can export a course's questions as JSON from its Settings → Export.

@@ -1,0 +1,7 @@
+node_modules/
+data/
+*.tmp
+# personal Claude Code setup (not part of the app)
+.claude/settings.local.json
+.claude/skills/*
+!.claude/skills/exam-import/
