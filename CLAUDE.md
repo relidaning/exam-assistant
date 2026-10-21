@@ -10,7 +10,8 @@ types per module, exam composition/duration) decide what each module asks. Theme
 
 - `npm start` — server on `http://localhost:8710` (binds 0.0.0.0 so a phone on the LAN can use it; `PORT`, `HOST`,
   `EXAM_DATA_DIR` env vars override). No service starts it, so start it detached (`nohup setsid npm start …`), or it
-  stops when the shell exits. To check UI changes in a browser, run a second server on a copy of the data
+  stops when the shell exits. To restart, kill the old one by PID (`pgrep -f "node server.mjs"`), not with a
+  `pgrep/pkill -f "npm start"` in the same command line that starts it: that matches its own shell. To check UI changes in a browser, run a second server on a copy of the data
   (`EXAM_DATA_DIR=<copy> PORT=8799`) so the user's real sessions and stats aren't touched
 - `npm test` — unit + API tests (node:test). `npm run test:e2e` — Playwright run through every question type at
   desktop and phone sizes (uses /usr/bin/google-chrome; screenshots dir as optional arg)
@@ -44,7 +45,8 @@ Format reference: `docs/FORMAT.md`. Never write to `data/exam.db` by hand — go
 - `lib/store.mjs` — SQLite via built-in `node:sqlite`, one file `data/exam.db` (WAL). Tables: users, logins (hashed
   tokens), courses (owner, visibility, forked_from, default settings JSON), questions (canonical JSON + type/chapter),
   user_courses (a user's own settings). Per user (`user_id`): attempts (every answer, timestamped), question_state
-  (summary + star/note/cleared), exams, sessions (each module's unfinished round, so every address/device shares it;
+  (summary + star/note/cleared), exams (`detail` holds a sitting's questions and answers so it can be reviewed later;
+  NULL for sittings from before 2026-10-21), sessions (each module's unfinished round, so every address/device shares it;
   the browser keeps a live copy in `public/js/data.js` and saves back after 400 ms). Migrates old JSON storage on first open (→ `data/json-backup/`).
   Mistakes-book rule: wrong > 0 and streak < 3, unless cleared. Pre-accounts rows have owner NULL / user_id 0 and
   are claimed by the first account (admin)
