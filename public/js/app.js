@@ -2,7 +2,7 @@
 import { $, $$, esc, api, auth, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, themeIcon } from './ui.js';
 import { md, mdInline } from './render.js';
 import { TYPES, TYPE_LABELS, answerText, isOpen } from './grade.js';
-import { loadCourse, peekCourse, invalidate, sessions, flushAllSessions } from './data.js';
+import { loadCourse, peekCourse, invalidate, sessions, flushAllSessions, flushSessions, examDetail } from './data.js';
 import { MODULES, pickQuestions, inMistakes, accuracy, moduleConfig, examConfigured, examSummary, pointsFor, PAST_PAPER_TAG } from './session.js';
 import { renderRun, renderResult, newSession, teardownRun } from './run.js';
 import { navigate, startNav } from './nav.js';
@@ -55,6 +55,7 @@ const routes = [
   [/^\/c\/([^/]+)\/setup\/\w+$/, toCourseSettings],
   [/^\/c\/([^/]+)\/run\/(\w+)$/, (id, slot) => renderRun(app, id, slot)],
   [/^\/c\/([^/]+)\/review\/(\w+)\/(\d+)$/, (id, slot, n) => renderRun(app, id, slot, { reviewIdx: Number(n) })],
+  [/^\/c\/([^/]+)\/review-missed\/(\w+)\/(\d+)$/, (id, slot, n) => renderRun(app, id, slot, { reviewIdx: Number(n), missedOnly: true })],
   [/^\/c\/([^/]+)\/result\/(\w+)$/, (id, slot) => renderResult(app, id, slot)],
   [/^\/c\/([^/]+)\/(?:run|result)$/, (id) => navigate(`#/c/${enc(id)}`)], // links from before per-module sessions
   [/^\/c\/([^/]+)\/stats$/, statsPage],
@@ -516,10 +517,10 @@ function drawCourse(id, data) {
 
   const tiles = [
     { key: 'practice', title: 'Practice', info: `${practiceCount} questions`, n: practiceCount },
-    { key: 'mistakes', title: 'Mistakes', info: mistakes ? `${mistakes} to review` : 'All clear', n: mistakes },
     examReady
       ? { key: 'exam', title: 'Mock exam', info: `${exam.questions} q · ${exam.timeMin ? `${exam.timeMin} min` : 'no limit'}`, n: exam.questions }
       : { key: 'exam', title: 'Mock exam', info: 'Tap to set up', href: `#/settings/c/${enc(id)}#exam`, unset: true },
+    { key: 'mistakes', title: 'Mistakes', info: mistakes ? `${mistakes} to review` : 'All clear', n: mistakes },
     { key: 'starred', title: 'Starred', info: starred ? `${starred} saved` : 'None yet', n: starred, on: '#2b1a00' },
     { key: 'stats', title: 'Statistics', info: 'Progress, accuracy, exam history', href: `${base}/stats`, color: '#1baf7a' },
   ];
@@ -748,6 +749,7 @@ async function startSession(id, module) {
     // with past papers imported, sit one real paper as it was set; without, a draw by the exam settings
     const pick = await choosePaper(data);
     if (!pick) return;
+    if (pick.review) { openExamReview(id, pick.review); return; }
     if (pick.paper) { ids = pick.paper.questions.map((q) => q.id); title = pick.paper.name; }
   }
   const opts = module === 'exam'
@@ -755,6 +757,16 @@ async function startSession(id, module) {
     : { title };
   sessions.save(newSession(id, module, ids, opts));
   navigate(`#/c/${enc(id)}/run/${module}`);
+}
+
+/** Open a past mock exam sitting on its results page (it is loaded into the 'review' slot). */
+async function openExamReview(id, examId) {
+  try {
+    const d = await examDetail(id, examId);
+    sessions.save({ v: 1, ...d, courseId: id, module: 'exam', slot: 'review', phase: 'done', idx: 0, instant: false });
+    await flushSessions(id); // the results page reloads the rounds from the server
+    navigate(`#/c/${enc(id)}/result/review`);
+  } catch (e) { toast(e.message, 'error'); }
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -805,11 +817,13 @@ async function choosePaper(data) {
     body: `<p class="muted small">Sit one real paper exactly as it was set. Newest first.</p>
       <div class="paper-list">
         ${papers.map((p, i) => `<label class="paper-opt"><input type="radio" name="paper" value="${i}" ${i === first ? 'checked' : ''}>
-          <span><b>${esc(short(p.name))}</b><small>${p.questions.length} questions · ${p.questions.reduce((a, q) => a + pointsFor(q, pts), 0)} pts</small>${done(sittings(p.name))}</span></label>`).join('')}
+          <span><b>${esc(short(p.name))}</b><small>${p.questions.length} questions · ${p.questions.reduce((a, q) => a + pointsFor(q, pts), 0)} pts</small>${done(sittings(p.name))}</span>
+          ${(() => { const last = sittings(p.name).filter((e) => e.reviewable).at(-1); return last ? `<button class="btn ghost small paper-review" value="review:${last.id}" formnovalidate title="Your last sitting of this paper, with answers">Review</button>` : ''; })()}</label>`).join('')}
       </div>`,
     buttons: [{ label: 'Cancel', value: null }, { label: 'Start', value: 'start', primary: true }],
     withForm: true,
   });
+  if (typeof value === 'string' && value.startsWith('review:')) return { review: Number(value.slice(7)) };
   if (value !== 'start') return null;
   return { paper: papers[Number(form.paper)] };
 }
@@ -1030,8 +1044,8 @@ async function statsPage(id) {
         <table class="type-table"><thead><tr><th>Chapter</th><th>Practiced</th><th>Accuracy</th><th></th></tr></thead>
         <tbody>${chapters.map((c) => accRow(c.name || 'No chapter', c)).join('')}</tbody></table></section>` : ''}
       <section class="card"><h3>Mock exam history</h3>
-        ${exams.length ? `${examSpark(progress.exams)}<table class="type-table"><thead><tr><th>When</th><th>Score</th><th>Correct</th><th>Time</th></tr></thead><tbody>
-        ${exams.map((e) => `<tr><td>${esc(new Date(e.at).toLocaleString())}</td><td><b>${e.score}</b>/${e.maxScore} <span class="muted">(${pct(e.score, e.maxScore)}%)</span></td><td>${e.correct}/${e.total}</td><td>${fmtDuration(e.durationSec)}</td></tr>`).join('')}
+        ${exams.length ? `${examSpark(progress.exams)}<table class="type-table"><thead><tr><th>When</th><th>Score</th><th>Correct</th><th>Time</th><th></th></tr></thead><tbody>
+        ${exams.map((e) => `<tr><td>${esc(new Date(e.at).toLocaleString())}</td><td><b>${e.score}</b>/${e.maxScore} <span class="muted">(${pct(e.score, e.maxScore)}%)</span></td><td>${e.correct}/${e.total}</td><td>${fmtDuration(e.durationSec)}</td><td>${e.reviewable ? `<button type="button" class="link-btn" data-review="${e.id}">Review</button>` : ''}</td></tr>`).join('')}
         </tbody></table>` : '<p class="muted">No mock exams yet.</p>'}
       </section>
       <section class="card"><h3>Most missed</h3>
@@ -1040,6 +1054,7 @@ async function statsPage(id) {
       </section>
       <section class="card danger-zone"><h3>Reset</h3><p class="muted">Clears your attempts, stars, notes and exam history for this course. Questions are kept.</p><button class="btn danger" data-act="reset">Reset progress</button></section>
     </div>`;
+  $$('[data-review]', app).forEach((b) => b.addEventListener('click', () => openExamReview(id, Number(b.dataset.review))));
   $('[data-act="drill"]', app)?.addEventListener('click', () => {
     sessions.save(newSession(id, 'practice', worst.map((q) => q.id), { title: 'Most missed', slot: 'drill' }));
     navigate(`#/c/${enc(id)}/run/drill`);

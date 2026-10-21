@@ -36,6 +36,9 @@ export async function setFlags(id, payload) {
   return p;
 }
 
+/** A past mock exam sitting (questions, answers, results), as saved when it was handed in. */
+export const examDetail = (id, examId) => api('GET', `/api/courses/${encodeURIComponent(id)}/exams/${examId}`);
+
 export async function recordExam(id, exam) {
   const e = await api('POST', `/api/courses/${encodeURIComponent(id)}/exam`, exam);
   const d = cache.get(id);
@@ -45,10 +48,11 @@ export async function recordExam(id, exam) {
 
 // ---------- in-progress sessions, kept on the server so every address and device opens the same round ----------
 // One saved session per course *and module*, so starting a mock exam never wipes an unfinished practice.
-// Slots: the four modules, plus 'drill' for one-off sets ("Practice the missed", "Most missed").
+// Slots: the four modules, plus 'drill' for one-off sets ("Practice the missed", "Most missed") and 'review', a past
+// mock exam sitting opened for review.
 // Reads are synchronous from `live` (filled whenever the course loads); saves go to the server shortly after.
 // localStorage only holds rounds from before (or saves that could not reach the server); they move up on the next load.
-export const SLOTS = ['practice', 'mistakes', 'exam', 'starred', 'drill'];
+export const SLOTS = ['practice', 'exam', 'mistakes', 'starred', 'drill', 'review'];
 // per user, so a round kept on a shared device never shows up for someone else
 const key = (courseId, slot) => `exam.session.${auth.user?.id ?? 0}.${courseId}.${slot}`;
 const live = new Map(); // courseId → { slot: session }

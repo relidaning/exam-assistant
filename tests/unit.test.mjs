@@ -563,7 +563,14 @@ test('accounts: private progress, public courses, publish, fork', async () => {
     await ann('POST', `/api/courses/${c.id}/attempt`, { qid: q1, correct: true });
     await bob('POST', `/api/courses/${c.id}/attempt`, { qid: q1, correct: false });
     await bob('POST', `/api/courses/${c.id}/flag`, { qid: q2, starred: true, note: 'bob only' });
-    await bob('POST', `/api/courses/${c.id}/exam`, { title: 'P', total: 2, score: 1, maxScore: 2, correct: 1 });
+    const sat = (await bob('POST', `/api/courses/${c.id}/exam`, { title: 'P', total: 2, score: 1, maxScore: 2, correct: 1, detail: { qids: [q1, q2], entries: { [q1]: { response: 0 } } } })).body;
+    assert.ok(sat.id && sat.reviewable, 'a sitting saved with its answers can be reviewed');
+    assert.deepEqual((await bob('GET', `/api/courses/${c.id}/exams/${sat.id}`)).body.qids, [q1, q2]);
+    assert.equal((await ann('GET', `/api/courses/${c.id}/exams/${sat.id}`)).status, 404, "another user's sitting is not theirs to open");
+    const old = (await bob('POST', `/api/courses/${c.id}/exam`, { title: 'P', total: 2, score: 0, maxScore: 2, correct: 0 })).body;
+    assert.equal(old.reviewable, false);
+    assert.equal((await bob('GET', `/api/courses/${c.id}/exams/${old.id}`)).status, 404, 'a sitting without answers has nothing to review');
+    assert.deepEqual((await bob('GET', `/api/courses/${c.id}`)).body.progress.exams.map((e) => [e.id, e.reviewable, 'detail' in e]), [[sat.id, true, false], [old.id, false, false]], 'the course load lists sittings without their answers');
     await bob('PUT', `/api/courses/${c.id}/sessions/practice`, { qids: [q1], entries: {} });
     assert.deepEqual((await ann('GET', '/api/sessions')).body.filter((r) => r.courseId === c.id), [], "bob's rounds are not in ann's list");
     await bob('PUT', `/api/courses/${c.id}/settings`, { exam: { perType: { single: 1 }, timeMin: 5 } });

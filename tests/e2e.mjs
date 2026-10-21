@@ -164,7 +164,13 @@ try {
     if (n === 0) {
       const g = await page.getAttribute('.run-actions .verify', 'href');
       const query = new URL(g).searchParams.get('q');
-      check(g.startsWith('https://www.google.com/search?q=') && query.length > 5 && !query.includes('$') && !query.includes('{{'), `Verify searches the question on Google ("${query.slice(0, 40)}…")`);
+      check(g.startsWith('https://www.google.com/search?') && new URL(g).searchParams.get('udm') === '50' && query.length > 5 && !query.includes('$') && !query.includes('{{'), `Verify asks Google AI Mode about the question ("${query.slice(0, 40)}…")`);
+      const symbols = await page.evaluate(async () => (await import('/js/answer.js')).googleQuery({
+        stem: '## 在特权模式"#"提示符下\n> 输入 **哪个** `命令`？do~while、a|b、$x^2$ 和 ____ {{enable}}\n```\nconfig # note\n```',
+        options: ['switch>', 'switch#', 'switch(config)#'],
+      }));
+      check(symbols === '在特权模式"#"提示符下 输入 哪个 命令？do~while、a|b、x^2 和 config # note A. switch> B. switch# C. switch(config)#',
+        `the query keeps the question's own symbols and drops only Markdown (${symbols})`);
       check((await page.getAttribute('.run-actions .verify', 'target')) === '_blank', 'Verify opens in a new tab');
       check((await page.textContent('.run-actions .verify')).trim() === 'Verify', 'button is labelled Verify');
     }
@@ -209,6 +215,10 @@ try {
   await page.keyboard.press('s');
   await page.waitForSelector('.q-tools [data-act="star"].on');
   check((await page.$('.nav-cell.current.starred i')) !== null, 'S stars the question and the list shows a star badge');
+  await page.waitForSelector('.toast:not(.out)');
+  const deskToast = await page.evaluate(() => { const r = document.querySelector('.toast').getBoundingClientRect(); return [r.left + r.width / 2 - innerWidth / 2, r.top + r.height / 2 - innerHeight / 2, document.querySelector('#toasts').matches(':popover-open')]; });
+  check(Math.abs(deskToast[0]) < 30 && Math.abs(deskToast[1]) < 30 && deskToast[2], `the notice is centred, in the top layer (${deskToast})`);
+  await page.screenshot({ path: path.join(shots, 'toast.png') });
   await page.keyboard.press('s');
   await page.waitForSelector('.q-tools [data-act="star"]:not(.on)');
   await page.keyboard.press('p');
@@ -321,6 +331,31 @@ try {
   await page.click('dialog.dialog .btn.primary');
   await page.waitForSelector('.result-card');
   check((await page.textContent('.score-big')).includes('/'), 'exam result shows score / max');
+  // review the missed questions one after another, without picking them from the grid
+  const missedN = (await page.$$('.result-grid .nav-cell:not(.right)')).length;
+  check(missedN > 0 && (await page.textContent('a[href*="/review-missed/exam/0"]')).includes(`Review the ${missedN} missed`), `the exam result offers to review the ${missedN} missed`);
+  await page.click('a[href*="/review-missed/exam/0"]');
+  await page.waitForSelector('.qcard');
+  check((await page.textContent('.run-count')) === `1 / ${missedN} missed`, `missed review goes through the missed only (${await page.textContent('.run-count')})`);
+  let wrongSeen = 0;
+  for (let n = 0; n < missedN; n++) {
+    if (await page.$('.verdict.right')) break;
+    wrongSeen++;
+    await page.click('[data-act="main"]'); // Next ›, then Results on the last
+  }
+  await page.waitForSelector('.result-card');
+  check(wrongSeen === missedN, `every question in the missed review was missed, then back to the results (${wrongSeen}/${missedN})`);
+  // a finished sitting can be reviewed later (the paper list is tested with the past papers below)
+  const examScore = (await page.textContent('.score-big')).replace(/\s+/g, '');
+  // the same from the exam history in Statistics
+  await page.goto(`${base}/#/c/demo/stats`);
+  await page.waitForSelector('[data-review]');
+  await page.click('[data-review]');
+  await page.waitForSelector('.result-card');
+  check(page.url().endsWith('/result/review') && (await page.textContent('.score-big')).replace(/\s+/g, '') === examScore, `Statistics: Review on a sitting in the exam history opens its result (${examScore})`);
+  await page.click('a[href*="/review/review/0"]');
+  await page.waitForSelector('.qcard .feedback');
+  check(true, 'and its questions open with their answers');
 
   // stats & import (in Settings)
   await page.goto(`${base}/#/c/demo/stats`);
@@ -356,7 +391,9 @@ try {
   check((await page.textContent('.run-count')).endsWith('/ 3') && (await page.textContent('.run-module')).includes(oldP), 'chosen paper is sat as set (3 questions, named after the paper)');
   check((await page.textContent('.stem')).includes(`${oldP} question 1`), 'questions keep the paper\'s order');
   await clearRound(page, 'exam');
-  await authed(`${base}/api/courses/demo/exam`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: newP, total: 2, score: 2, maxScore: 4, correct: 1, durationSec: 95, byType: {} }) });
+  const newQids = (await (await authed(`${base}/api/courses/demo`)).json()).course.questions.filter((q) => q.source === newP).map((q) => q.id);
+  const sitting = { title: newP, qids: newQids, entries: { [newQids[0]]: { response: 0, submitted: true, result: { correct: true, score: 1 } }, [newQids[1]]: { response: 1, submitted: true, result: { correct: false, score: 0 } } }, summary: { score: 2, maxScore: 4, correct: 1, total: 2, byType: {}, durationSec: 95 }, startedAt: Date.now() - 95000, finishedAt: Date.now() };
+  await authed(`${base}/api/courses/demo/exam`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: newP, total: 2, score: 2, maxScore: 4, correct: 1, durationSec: 95, byType: {}, detail: sitting }) });
   await page.goto(`${base}/#/c/demo`);
   await page.waitForSelector('.mtile');
   await page.click('[data-start="exam"]');
@@ -364,9 +401,14 @@ try {
   const doneText = await page.textContent('.paper-opt:nth-child(1) .paper-done');
   check(doneText.includes('Done') && doneText.includes('50%') && doneText.includes('1/2 right') && doneText.includes('1:35'), `a paper already sat shows its result (${doneText.replace(/\s+/g, ' ').trim()})`);
   check(await page.isChecked('.paper-opt:nth-child(2) input'), 'the newest paper not sat yet is preselected');
-  await page.click('dialog.dialog .btn:not(.primary)');
+  check((await page.$$('dialog.dialog .paper-review')).length === 1 && await page.$('.paper-opt:nth-child(1) .paper-review'), 'the paper sat before has a Review button, the other not');
+  await page.screenshot({ path: `${shots}/07b-paper-review.png` });
+  await page.click('.paper-opt:nth-child(1) .paper-review');
+  await page.waitForSelector('.result-card');
+  check(page.url().endsWith('/result/review') && (await page.textContent('.score-big')).replace(/\s+/g, '') === '2/4' && (await page.textContent('.result-card h2')).includes(newP), 'Review on that paper opens its last sitting (2/4)');
+  check((await page.$$('.result-grid .nav-cell.right')).length === 1 && (await page.$$('.result-grid .nav-cell.wrong')).length === 1, 'with each answer marked as it was');
 
-  // practice: Ctrl+Enter with nothing entered shows the answer (counted as wrong)
+  // practice: Enter with nothing entered shows the answer (counted as wrong)
   console.log('reveal');
   await putSettings({ practice: { types: ['fill'] } });
   await clearRound(page, 'practice');
@@ -374,12 +416,13 @@ try {
   await page.waitForSelector('.mtile');
   await page.click('[data-start="practice"]');
   await page.waitForSelector('.qcard .blank-input');
+  check(await page.isHidden('.reveal-fab'), 'no floating Answer button with a mouse and keyboard');
   await page.focus('.blank-input');
-  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('Enter');
   await page.waitForSelector('.blank-key');
-  check((await page.textContent('[data-act="main"]')).includes('Next') && (await page.$('.nav-cell.current.wrong')) !== null, 'Ctrl+Enter on a blank fill-in shows the answer and marks it wrong');
-  await page.keyboard.press('Control+Enter');
-  check((await page.textContent('.run-count')).startsWith('2'), 'Ctrl+Enter again moves to the next question');
+  check((await page.textContent('[data-act="main"]')).includes('Next') && (await page.$('.nav-cell.current.wrong')) !== null, 'Enter on a blank fill-in shows the answer and marks it wrong');
+  await page.keyboard.press('Enter');
+  check((await page.textContent('.run-count')).startsWith('2'), 'Enter again moves to the next question');
   await clearRound(page, 'practice');
 
   // practice: a revealed short answer must be self-graded before moving on
@@ -390,11 +433,13 @@ try {
   await page.click('[data-start="practice"]');
   await page.waitForSelector('.qcard .short-input');
   await page.focus('.short-input');
-  await page.keyboard.press('Control+Enter');
+  await page.keyboard.press('Enter');
   await page.waitForSelector('.selfgrade');
   await page.keyboard.press('Enter');
   await page.waitForTimeout(300);
   check((await page.textContent('.run-count')).startsWith('1') && (await page.$('[data-act="main"][data-blocked]')) !== null, 'Next is held until the revealed answer is graded');
+  check((await page.$('.selfgrade.needed')) !== null && (await page.textContent('[data-act="main"]')).includes('Grade'), 'the grading buttons light up and say why, instead of a toast');
+  await page.screenshot({ path: path.join(shots, 'grade-first.png') });
   await page.route('**/attempt', async (r) => { await new Promise((ok) => setTimeout(ok, 1500)); await r.continue().catch(() => {}); }); // a slow server
   const t0 = Date.now();
   await page.keyboard.press('n');
@@ -425,6 +470,14 @@ try {
   await page.waitForSelector('.qcard');
   const secs = (await page.textContent('.timer')).split(':').reduce((a, b) => a * 60 + Number(b), 0);
   check(secs >= 2 && secs < 4, `the practice clock stops while the round is left (${secs}s after 2s in, 3s away)`);
+  // the tab in the background (e.g. Verify opened in another tab): the clock keeps going
+  const setVisibility = (v) => page.evaluate((v) => { Object.defineProperty(document, 'visibilityState', { value: v, configurable: true }); document.dispatchEvent(new Event('visibilitychange')); }, v);
+  await setVisibility('hidden');
+  await page.waitForTimeout(2500);
+  await setVisibility('visible');
+  await page.waitForTimeout(1100);
+  const secs2 = (await page.textContent('.timer')).split(':').reduce((a, b) => a * 60 + Number(b), 0);
+  check(secs2 >= secs + 3, `the practice clock keeps running while the tab is hidden (${secs}s → ${secs2}s over ~3.6s)`);
   await clearRound(page, 'practice');
 
   // the round in progress is on the server: another address (another origin, own localStorage) opens the same round
@@ -610,6 +663,50 @@ try {
   check(!tiny.length, `answer inputs are >= 16px so iOS won't zoom on focus ${tiny.join(',')}`);
   await phone.screenshot({ path: `${shots}/22-phone-calc.png` });
   check(await noOverflow(), 'no horizontal overflow on phone (runner)');
+  // starring keeps the scroll position; only moving to another question goes back to the top
+  await phone.evaluate(() => { document.querySelector('.run-main').style.paddingBottom = '600px'; window.scrollTo(0, document.documentElement.scrollHeight); }); // questions are shuffled: make room to scroll whichever one is up
+  const starY = await phone.evaluate(() => scrollY);
+  await phone.tap('.q-tools [data-act="star"]');
+  await phone.waitForSelector('.q-tools [data-act="star"].on');
+  const starY2 = await phone.evaluate(() => scrollY);
+  check(starY > 50 && Math.abs(starY2 - starY) < 5, `phone: starring doesn't jump to the top (${starY} → ${starY2})`);
+  await phone.tap('[data-act="nav"]');
+  await phone.waitForSelector('.navigator.open');
+  await phone.tap('.nav-cell[data-go="2"]');
+  await phone.waitForFunction(() => scrollY === 0, null, { timeout: 2000 }).catch(() => {});
+  check(await phone.evaluate(() => scrollY) === 0, 'phone: another question starts at the top');
+  // phone: the floating Answer button shows the answer of an unanswered question (counted as wrong), then hides
+  const fab = await phone.evaluate(() => { const r = document.querySelector('.reveal-fab').getBoundingClientRect(), a = document.querySelector('.run-actions').getBoundingClientRect(); return [r.width > 0, r.right <= innerWidth, r.bottom <= a.top]; });
+  check(fab.every(Boolean), `phone: the Answer button sits bottom right, above the action bar (${fab})`);
+  const tools = await phone.evaluate(() => {
+    const t = document.querySelector('.q-tools').getBoundingClientRect(), f = document.querySelector('.reveal-fab').getBoundingClientRect(), a = document.querySelector('.run-actions').getBoundingClientRect();
+    return [getComputedStyle(document.querySelector('.q-tools')).position === 'fixed', t.left < 40, t.bottom <= a.top, t.right < f.left, Math.abs(t.bottom - f.bottom) < 2];
+  });
+  check(tools.every(Boolean), `phone: Star and Re-parse float at the bottom left, level with Answer and clear of it (${tools})`);
+  await phone.tap('.reveal-fab');
+  await phone.waitForSelector('.nav-cell.current.wrong', { state: 'attached' });
+  check(await phone.isHidden('.reveal-fab') && (await phone.textContent('[data-act="main"]')).includes('Next'), 'phone: tapping Answer reveals it and the button goes away');
+  await phone.screenshot({ path: `${shots}/26-phone-revealed.png` });
+  // notices sit in the middle of the screen
+  await phone.tap('.q-tools [data-act="star"]');
+  await phone.waitForSelector('.toast:not(.out)');
+  const toastBox = await phone.evaluate(() => { const r = document.querySelector('.toast').getBoundingClientRect(), h = document.querySelector('#toasts').getBoundingClientRect(); return [r.left + r.width / 2 - innerWidth / 2, r.top + r.height / 2 - innerHeight / 2, r.width, r.height, h.width, h.height].map(Math.round); });
+  check(Math.abs(toastBox[0]) < 30 && Math.abs(toastBox[1]) < 30, `phone: the notice is centred on the screen (${toastBox})`);
+  check(toastBox[3] < 60 && toastBox[2] < 250 && toastBox[5] < 60 && toastBox[4] < 250, `phone: the notice is a small badge, nothing around it covers the screen (${toastBox.slice(2)})`);
+  await phone.screenshot({ path: `${shots}/27-phone-toast.png` });
+  // phone: Enter in a written answer starts a new line instead of submitting
+  await putSettings({ practice: { types: ['short'] } });
+  await clearRound(phone, 'practice');
+  await phone.goto(`${base}/#/c/demo`);
+  await phone.waitForSelector('.mtile');
+  await phone.tap('[data-start="practice"]');
+  await phone.waitForSelector('.qcard .short-input');
+  await phone.tap('.short-input');
+  await phone.keyboard.type('first');
+  await phone.keyboard.press('Enter');
+  await phone.keyboard.type('second');
+  check(await phone.inputValue('.short-input') === 'first\nsecond' && !(await phone.$('.selfgrade')), 'phone: Enter in a written answer starts a new line');
+  await clearRound(phone, 'practice');
 
   // dark mode
   const dark = await newPage({ width: 1280, height: 860 }, { colorScheme: 'dark' });

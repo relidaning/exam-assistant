@@ -4,8 +4,8 @@ import { TYPE_LABELS } from './grade.js';
 
 export const MODULES = {
   practice: { label: 'Practice', icon: '📝', desc: 'Instant feedback after every question' },
-  mistakes: { label: 'Mistakes', icon: '❌', desc: 'Questions you got wrong' },
   exam: { label: 'Mock exam', icon: '⏱️', desc: 'Timed, scored at the end' },
+  mistakes: { label: 'Mistakes', icon: '❌', desc: 'Questions you got wrong' },
   starred: { label: 'Starred', icon: '⭐', desc: 'Your bookmarks' },
 };
 

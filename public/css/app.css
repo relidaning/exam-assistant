@@ -460,7 +460,7 @@ legend { font-weight: 700; margin-bottom: 8px; padding: 0; }
 .danger-zone { border-color: color-mix(in srgb, var(--bad) 35%, var(--border)); }
 
 /* ---------- runner ---------- */
-body[data-route="run"], body[data-route="review"] { background: var(--bg); }
+body[data-route="run"], body[data-route="review"], body[data-route="review-missed"] { background: var(--bg); }
 .run { display: flex; flex-direction: column; min-height: 100dvh; }
 .run-bar {
   position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 6px; padding: 4px 8px;
@@ -489,6 +489,16 @@ body[data-route="run"], body[data-route="review"] { background: var(--bg); }
 .selfgrade.nudge { animation: nudge .45s ease; }
 @keyframes nudge { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
 @media (prefers-reduced-motion: reduce) { .selfgrade.nudge { animation: none; outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 12px; } }
+.reveal-fab { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .run-body { padding-bottom: 170px; } /* room to scroll the last lines out from under the button */
+  .reveal-fab:not([hidden]) {
+    position: fixed; z-index: 21; right: max(var(--gutter), env(safe-area-inset-right)); bottom: calc(78px + env(safe-area-inset-bottom));
+    display: inline-flex; align-items: center; gap: 6px; min-height: 48px; padding: 0 18px; border: 0; border-radius: 999px;
+    background: var(--accent); color: var(--accent-text); font: inherit; font-weight: 700; box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+  }
+  .reveal-fab:active { transform: scale(.96); }
+}
 .run-actions [data-act="main"][data-skip] { background: var(--surface); border-color: var(--border); color: var(--muted); }
 
 /* navigator: side panel on wide screens, bottom sheet on narrow */
@@ -516,7 +526,8 @@ body[data-route="run"], body[data-route="review"] { background: var(--bg); }
 .nav-cell.wrong { background: var(--bad); border-color: var(--bad); color: #fff; }
 .nav-cell.partial { background: var(--partial); border-color: var(--partial); color: #fff; }
 .nav-cell.skipped { border-style: dashed; color: var(--muted); }
-.nav-cell.current { outline: 3px solid var(--accent); outline-offset: 1px; }
+/* current: a ring drawn inside the cell, so the scrolling grid never clips it (an outline would stick out) */
+.nav-cell.current { border-color: var(--accent); box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 4px var(--surface); font-weight: 700; }
 .result-grid { grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); max-height: none; }
 @media (min-width: 1100px) {
   .navigator { display: block; }
@@ -623,7 +634,11 @@ body[data-route="run"], body[data-route="review"] { background: var(--bg); }
 .reference, .explanation { background: var(--surface-2); border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
 .reference h4, .explanation h4 { margin: 0 0 .4em; font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
 .keywords { line-height: 2; }
-.selfgrade { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.selfgrade { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; padding: 10px; border: 1px solid var(--border); border-radius: 12px; transition: border-color .2s, background .2s; }
+.selfgrade .sg-ask { flex: 1 1 100%; margin: 0 0 2px; font-weight: 600; }
+.selfgrade .sg-why { display: none; font-weight: 400; color: var(--accent-ink); }
+.selfgrade.needed { border-color: var(--accent); background: var(--accent-soft); }
+.selfgrade.needed .sg-why { display: inline; }
 .selfgrade .btn { flex: 1 1 120px; --c: var(--ok); --c-soft: var(--ok-soft); background: var(--c-soft); border-color: var(--c); color: var(--c); font-weight: 600; }
 .selfgrade .sg-partial { --c: var(--partial); --c-soft: var(--partial-soft); }
 .selfgrade .sg-wrong { --c: var(--bad); --c-soft: var(--bad-soft); }
@@ -636,6 +651,17 @@ body[data-route="run"], body[data-route="review"] { background: var(--bg); }
 .q-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
 .q-tools .btn { min-height: 38px; padding: .35em .9em; font-size: .9rem; color: var(--muted); }
 .q-tools .btn.on { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
+.q-tools .qt-icon { margin-right: .35em; }
+@media (hover: none) and (pointer: coarse) {
+  /* touch screens: star and re-parse float at the bottom left, opposite the Answer button */
+  .q-tools { position: fixed; z-index: 21; left: max(var(--gutter), env(safe-area-inset-left)); bottom: calc(78px + env(safe-area-inset-bottom)); margin: 0; flex-wrap: nowrap; }
+  .q-tools .btn { width: 48px; height: 48px; min-height: 48px; padding: 0; border-radius: 50%; justify-content: center; font-size: 1.25rem;
+    background: var(--surface); border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0, 0, 0, .18); }
+  .q-tools .btn svg { width: 20px; height: 20px; }
+  .q-tools .qt-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .q-tools .qt-icon { margin: 0; }
+  .q-tools .btn:active { transform: scale(.96); }
+}
 .note-footer { margin-top: 14px; font-size: .9rem; }
 .note-footer textarea { margin-top: 6px; }
 .note-meta { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; color: var(--muted); margin-top: 8px; font-size: .85rem; }
@@ -678,6 +704,7 @@ dialog.dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .paper-opt small { color: var(--muted); }
 .paper-opt .paper-done { color: var(--ok); font-weight: 600; }
 .paper-opt .paper-done.todo { color: var(--muted); font-weight: 400; }
+.paper-opt .paper-review { margin-left: auto; flex: none; }  /* a paper already sat: open that sitting */
 .reparse-text { font-family: var(--mono); font-size: 1rem; min-height: 180px; }
 .reparse-note { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; margin-bottom: 12px; border-radius: 10px; background: var(--accent-soft); font-size: .9rem; }
 .reparse-preview { margin-top: 12px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); max-height: 38vh; overflow-y: auto; }
@@ -688,12 +715,25 @@ dialog::backdrop { background: rgba(10, 14, 25, .45); backdrop-filter: blur(2px)
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
 dialog.lightbox { border: 0; padding: 0; background: transparent; max-width: 100vw; max-height: 100dvh; }
 dialog.lightbox img { max-width: 96vw; max-height: 92dvh; border-radius: 8px; background: #fff; cursor: zoom-out; }
-#toasts { position: fixed; top: calc(12px + env(safe-area-inset-top)); left: 50%; transform: translateX(-50%); z-index: 100; display: grid; gap: 8px; pointer-events: none; width: max-content; max-width: calc(100vw - 32px); }
-.toast { padding: .6em 1.1em; border-radius: 12px; background: var(--text); color: var(--bg); font-size: .92rem; box-shadow: var(--shadow); transition: opacity .3s, transform .3s; }
-.toast.ok { background: var(--ok); color: #fff; }
-.toast.error { background: var(--bad); color: #fff; }
-.toast.warn { background: var(--warn); color: #fff; }
-.toast.out { opacity: 0; transform: translateY(-6px); }
+/* toasts: a small badge in the middle of the screen (a popover, so above dialogs too); taps go through.
+   Centred with top/left + translate and sized by max-content: inset: 0 + fit-content stretched it over the whole
+   screen on iOS Safari */
+#toasts {
+  position: fixed; inset: auto; top: 50%; left: 50%; transform: translate(-50%, -50%); margin: 0;
+  width: max-content; height: auto; max-width: calc(100vw - 48px); padding: 0; border: 0; background: none; overflow: visible;
+  z-index: 100; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.toast {
+  display: flex; align-items: center; gap: 8px; max-width: 100%; padding: 8px 16px 8px 9px; border-radius: 20px;
+  background: color-mix(in srgb, var(--text) 90%, transparent); color: var(--bg); box-shadow: 0 6px 20px rgba(10, 14, 25, .25);
+  font-size: .9rem; font-weight: 600; line-height: 1.35; animation: toast-in .18s ease-out; transition: opacity .25s, transform .25s;
+}
+.toast-ico { flex: none; display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; font-size: .7rem; font-weight: 800; background: var(--accent); color: var(--accent-text); }
+.toast.ok .toast-ico { background: var(--ok); color: #fff; }
+.toast.warn .toast-ico { background: var(--warn); color: #fff; }
+.toast.error .toast-ico { background: var(--bad); color: #fff; }
+.toast.out { opacity: 0; transform: scale(.96); }
+@keyframes toast-in { from { opacity: 0; transform: scale(.94); } }
 
 /* ---------- phones ---------- */
 @media (max-width: 640px) {

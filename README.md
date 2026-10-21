@@ -8,7 +8,7 @@ screen that fits it, and wrong answers go into a mistakes book until you've got 
 mock exam is timed and sets the paper the way the real one is set.
 
 <p align="center">
-  <img src="docs/screenshots/phone-course.png" width="230" alt="A course: Practice, Mistakes, Mock exam, Starred and Statistics">
+  <img src="docs/screenshots/phone-course.png" width="230" alt="A course: Practice, Mock exam, Mistakes, Starred and Statistics">
   <img src="docs/screenshots/phone-practice.png" width="230" alt="A single-choice question with instant feedback and an explanation">
   <img src="docs/screenshots/phone-calculation.png" width="230" alt="A calculation question that accepts expressions, with a live preview">
 </p>
@@ -48,8 +48,8 @@ Your own courses and your forks. Open one and pick a module:
 | Module | What it does |
 |---|---|
 | **Practice** | Questions in random order, with the answer and explanation right after each one |
+| **Mock exam** | Timed, with no feedback until you hand in. With past papers loaded, you choose a real paper and sit it exactly as it was set; otherwise the exam draws questions by your settings. A paper you've sat has a Review button in the paper list (and in Statistics) that reopens that sitting with your answers |
 | **Mistakes** | Everything you got wrong. A question leaves after 3 right answers in a row, or when you remove it |
-| **Mock exam** | Timed, with no feedback until you hand in. With past papers loaded, you choose a real paper and sit it exactly as it was set; otherwise the exam draws questions by your settings |
 | **Starred** | Questions you've saved with ☆ |
 | **Statistics** | How much you've practised, your accuracy by type and chapter, your daily activity, your mock exam scores and your most-missed questions |
 
@@ -93,10 +93,10 @@ Also everywhere:
 - **Math, chemistry and media**: math and chemistry formulas render properly; images zoom when tapped; audio and
   video play.
 - **Star and note**: star a question to save it, and keep notes on it.
-- **Verify** (or G) searches Google for the question, so you can double-check an answer. It's hidden during mock exams.
+- **Verify** (or G) asks Google AI Mode about the question, so you can double-check an answer. It's hidden during mock exams.
 - **Re-parse** (or P) shows a question's original source text when it was read wrongly from your notes. Fix the text,
   check the preview and save; your progress on the question is kept.
-- **Keyboard and touch**: ←/→ to move, Enter to submit, S to star, M for the question list; swipe between questions
+- **Keyboard and touch**: ←/→ to move, Enter to submit (on a phone, Enter starts a new line in written answers), S to star, M for the question list; swipe between questions
   on a touch screen.
 
 ## Getting questions in

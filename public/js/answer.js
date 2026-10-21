@@ -10,7 +10,7 @@ import { LETTERS, TYPE_LABELS, answerText, parseNumeric, fmtNum, isOpen } from '
  *   showFeedback: bool  — show correct answer + explanation now
  *   locked: bool        — answer can no longer be changed
  *   autoSubmit: bool    — single/judge submit on tap
- *   onChange(response), onSubmit(reveal?: bool — Ctrl+Enter, may be blank), onSelfGrade(verdict: 'right'|'partial'|'wrong'),
+ *   onChange(response), onSubmit(reveal?: bool — Enter, may be blank), onSelfGrade(verdict: 'right'|'partial'|'wrong'),
  *   footer: HTMLElement|null — extra controls appended under the feedback (notes etc.)
  * }
  */
@@ -74,7 +74,9 @@ export function googleQuery(q) {
     .replace(/\{\{([^}]*)\}\}/g, ' ')                // cloze answers must not leak into the query
     .replace(/_{3,}/g, ' ')                           // blanks
     .replace(/\$+([^$]*)\$+/g, (_, tex) => texToText(tex))
-    .replace(/[*_`#>|~]/g, ' ')
+    // only Markdown formatting goes; symbols that belong to the question stay (switch#, switch>, C#, do~while, a|b)
+    .replace(/^ {0,3}(#{1,6} +|> ?|```.*$)/gm, '') // heading marks, quote marks, code fences
+    .replace(/\*\*|__|`/g, '')                      // bold and inline code
     .replace(/\s+/g, ' ')
     .trim();
   // the whole question goes to Google: stem plus every option with its letter
@@ -83,7 +85,8 @@ export function googleQuery(q) {
   return text.slice(0, 1500); // stays well inside URL length limits even for long CJK questions
 }
 
-export const googleUrl = (q) => `https://www.google.com/search?q=${encodeURIComponent(googleQuery(q))}`;
+// udm=50 opens Google's AI Mode, which answers the question instead of listing pages
+export const googleUrl = (q) => `https://www.google.com/search?udm=50&q=${encodeURIComponent(googleQuery(q))}`;
 
 function button(label, cls, onClick) {
   const b = document.createElement('button');
@@ -196,10 +199,9 @@ function fillBlanks(stem, q, st, ctx, show) {
       if (e.key !== 'Enter' || e.isComposing) return;
       e.preventDefault();
       e.stopPropagation();
-      if (e.ctrlKey || e.metaKey) { ctx.onSubmit?.(true); return; }
-      const next = slots[i + 1]?.querySelector('input');
+      const next = !(e.ctrlKey || e.metaKey) && slots[i + 1]?.querySelector('input');
       if (next) next.focus();
-      else ctx.onSubmit?.();
+      else ctx.onSubmit?.(true);
     });
     if (input.readOnly) {
       // locked: plain text that wraps, so long answers are never cut off inside an input box
@@ -215,7 +217,7 @@ function fillBlanks(stem, q, st, ctx, show) {
 }
 
 function fillHint(area, q, st, ctx) {
-  if (!ctx.locked) area.insertAdjacentHTML('beforeend', `<p class="hint">Type into the blank${q.answer.length > 1 ? 's' : ''} above — Enter moves to the next one${ctx.mode === 'practice' ? ', Ctrl+Enter shows the answer' : ''}.</p>`);
+  if (!ctx.locked) area.insertAdjacentHTML('beforeend', `<p class="hint">Type into the blank${q.answer.length > 1 ? 's' : ''} above — Enter moves to the next one${ctx.mode === 'practice' ? ', and on the last one submits (or shows the answer)' : ''}.</p>`);
 }
 
 // ---------- calculation ----------
@@ -253,9 +255,8 @@ function calc(area, q, st, ctx, show) {
       if (e.key !== 'Enter' || e.isComposing) return;
       e.preventDefault();
       e.stopPropagation();
-      if (e.ctrlKey || e.metaKey) { ctx.onSubmit?.(true); return; }
-      const next = wrap.querySelectorAll('.calc-row input')[i + 1];
-      if (next) next.focus(); else ctx.onSubmit?.();
+      const next = !(e.ctrlKey || e.metaKey) && wrap.querySelectorAll('.calc-row input')[i + 1];
+      if (next) next.focus(); else ctx.onSubmit?.(true);
     });
     if (show) {
       const ok = parts[i]?.ok;
@@ -314,13 +315,16 @@ function short(area, q, st, ctx, show) {
   const ta = document.createElement('textarea');
   ta.className = 'short-input';
   ta.rows = 5;
-  ta.placeholder = ctx.locked ? '(left blank)' : ctx.mode === 'practice' ? 'Write your answer… (Ctrl+Enter to submit, or to see the answer)' : 'Write your answer… (Ctrl+Enter to submit)';
+  // touch screens: Enter starts a new line (no Shift key to hold); the Submit button submits
+  const enterSubmits = !matchMedia('(hover: none) and (pointer: coarse)').matches;
+  ta.placeholder = ctx.locked ? '(left blank)' : !enterSubmits ? 'Write your answer…'
+    : ctx.mode === 'practice' ? 'Write your answer… (Enter to submit, or to see the answer; Shift+Enter for a new line)' : 'Write your answer… (Enter to submit, Shift+Enter for a new line)';
   ta.value = st.response || '';
   ta.readOnly = !!ctx.locked;
   const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight + 2, 600)}px`; };
   ta.addEventListener('input', () => { grow(); ctx.onChange(ta.value, false); });
   ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); ctx.onSubmit?.(true); }
+    if (enterSubmits && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); e.stopPropagation(); ctx.onSubmit?.(true); }
     else e.stopPropagation(); // typing letters must not trigger shortcuts
   });
   requestAnimationFrame(grow);
@@ -355,6 +359,7 @@ function feedback(q, st, ctx) {
   if (isOpen(q.type) && ctx.onSelfGrade) {
     const row = document.createElement('div');
     row.className = 'selfgrade';
+    row.innerHTML = '<p class="sg-ask">How did you do? <span class="sg-why">Grade it to move on — it isn’t counted until you do.</span></p>';
     for (const [v, label, key, n] of [['right', 'I got it', 'Y', '1'], ['partial', 'Partly', 'P', '2'], ['wrong', 'Missed it', 'N', '3']]) {
       const b = button(`${label}<kbd class="key-hint">${key}</kbd>`, `btn sg-${v}${st.selfGrade === v ? ' on' : ''}`, () => ctx.onSelfGrade(v));
       b.dataset.keys = `${key} ${n}`;

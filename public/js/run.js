@@ -13,10 +13,11 @@ import { openReparse } from './reparse.js';
 let timerHandle = null;
 let keyHandler = null;
 
-// Practice clock: only time spent with the round on screen counts. s.activeMs holds the banked time;
-// clock.since is when it last resumed (null while paused: round left, tab hidden, phone locked).
-// Every save carries the time so far; pausing only banks it here, so an idle page left open never pushes its
-// stale copy over progress made on another device — time after the last answer goes out with the next save.
+// Practice clock: time with the round open counts, also while the tab is in the background (looking an answer up
+// in another tab, the phone locked). s.activeMs holds the banked time; clock.since is when it last resumed (null
+// while paused: round left). Every save carries the time so far; hiding the page only banks it here, so an idle
+// page left open never pushes its stale copy over progress made on another device — time after the last answer
+// goes out with the next save.
 const clock = { s: null, since: null };
 const activeMs = (s) => (s.activeMs || 0) + (clock.s === s && clock.since ? Date.now() - clock.since : 0);
 function bankClock(s) {
@@ -31,7 +32,7 @@ function pauseClock() {
 function resumeClock() {
   if (clock.s && !clock.since && document.visibilityState === 'visible') clock.since = Date.now();
 }
-beforeExit(pauseClock);
+beforeExit(() => bankClock(clock.s)); // the page going to the background banks the time but keeps counting
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') resumeClock(); });
 
 /** opts.slot: where it is saved (default: its module; one-off sets use 'drill'). */
@@ -67,7 +68,11 @@ function entry(s, qid) {
 }
 
 /** Render the runner for a course's saved session in one slot (practice, mistakes, exam, starred, drill). */
-export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
+/** A finished round's missed questions: wrong or partly right, unanswered ones included (they were graded too). */
+const missedIds = (s, data) => s.qids.filter((id) => data.byId.has(id) && s.entries[id]?.result && !s.entries[id].result.correct);
+
+/** missedOnly: reviewing a finished round goes through its missed questions only (reviewIdx counts within them). */
+export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = false } = {}) {
   teardownRun();
   const data = await loadCourse(courseId);
   await syncSessions(courseId); // another device may have moved this round on
@@ -78,12 +83,14 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
   // drop questions deleted since the session started
   s.qids = s.qids.filter((id) => data.byId.has(id));
   if (!s.qids.length) { sessions.clear(courseId, slot); toast('This session has no questions left', 'warn'); navigate(`#/c/${encodeURIComponent(courseId)}`); return; }
-  if (reviewIdx != null) s.idx = Math.min(Math.max(0, reviewIdx), s.qids.length - 1);
+  const missed = missedOnly && s.phase === 'done' ? missedIds(s, data) : null;
+  if (missed && !missed.length) { navigate(`#/c/${encodeURIComponent(courseId)}/result/${slot}`); return; }
+  if (reviewIdx != null) s.idx = Math.min(Math.max(0, reviewIdx), (missed || s.qids).length - 1);
 
   const isExam = s.module === 'exam';
   const view = () => {
     if (s.phase === 'grading') return { ids: s.gradingQids, mode: 'grade' };
-    if (s.phase === 'done') return { ids: s.qids, mode: 'review' };
+    if (s.phase === 'done') return { ids: missed || s.qids, mode: 'review' };
     return { ids: s.qids, mode: isExam ? 'exam' : 'practice' };
   };
   const curIdx = () => (s.phase === 'grading' ? (s.gradeIdx ||= 0) : s.idx);
@@ -103,9 +110,10 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
         <aside class="navigator" aria-label="Questions"><div class="nav-head"><b>Questions</b><button class="icon-btn" data-act="nav-close" aria-label="Close">✕</button></div><div class="nav-legend"></div><div class="nav-grid"></div></aside>
       </div>
       <footer class="run-actions">
-        <a class="btn ghost verify" target="_blank" rel="noopener" title="Look this question up on Google (G)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>Verify</a>
+        <a class="btn ghost verify" target="_blank" rel="noopener" title="Ask Google AI Mode about this question (G)"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L21 21"/></svg>Verify</a>
         <button class="btn primary" data-act="main"></button>
       </footer>
+      <button class="reveal-fab" data-act="reveal" hidden aria-label="Show the answer"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Answer</button>
     </div>`;
   const main = $('.run-main', root);
   const nav = $('.navigator', root);
@@ -142,13 +150,17 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     main.replaceChildren(questionCard(question, st, ctx), questionTools(p, mode));
     $('.run-count', root).textContent = mode === 'grade'
       ? `Grade short answers · ${curIdx() + 1} / ${ids.length}`
-      : `${curIdx() + 1} / ${ids.length}`;
+      : `${curIdx() + 1} / ${ids.length}${missed ? ' missed' : ''}`;
     const done = ids.filter((id) => s.entries[id]?.submitted || (isExam && !isBlank(data.byId.get(id), s.entries[id]?.response))).length;
     $('.progress-fill', root).style.width = `${pct(done, ids.length)}%`;
     updateActions();
     drawNav();
-    main.scrollTo?.({ top: 0 });
-    window.scrollTo({ top: 0 });
+    // back to the top only for another question; redrawing the same one (star, submit, note) keeps the place
+    if (main.dataset.qid !== question.id) {
+      main.dataset.qid = question.id;
+      main.scrollTo?.({ top: 0 });
+      window.scrollTo({ top: 0 });
+    }
     if (focus) {
       const first = main.querySelector('.blank-input:not([readonly]), .calc-row input:not([readonly]), .short-input:not([readonly])');
       if (first && matchMedia('(pointer: fine)').matches) first.focus({ preventScroll: true });
@@ -166,7 +178,9 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     const last = i === ids.length - 1;
     btn.disabled = false;
     delete btn.dataset.skip;
-    // Verify: Google search for this question, hidden while a mock exam is being answered
+    // touch screens have no Enter key: a floating button shows the answer instead (CSS shows it on touch only)
+    $('.reveal-fab', root).hidden = mode !== 'practice' || st.submitted;
+    // Verify: this question in Google AI Mode, hidden while a mock exam is being answered
     const verify = $('.verify', root);
     verify.hidden = mode === 'exam';
     verify.href = googleUrl(question);
@@ -176,7 +190,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
       else if (!st.submitted) { btn.textContent = last ? 'Skip & finish' : 'Skip ›'; btn.dataset.do = last ? 'finish' : 'next'; btn.dataset.skip = '1'; }
       else if (last) { btn.textContent = 'Finish'; btn.dataset.do = 'finish'; }
       else { btn.textContent = 'Next ›'; btn.dataset.do = 'next'; }
-      if (ungraded()) btn.dataset.blocked = '1'; else delete btn.dataset.blocked;
+      if (ungraded()) { btn.dataset.blocked = '1'; btn.textContent = 'Grade it to continue'; } else delete btn.dataset.blocked;
     } else if (mode === 'exam') {
       if (last) { btn.textContent = 'Hand in'; btn.dataset.do = 'handin'; }
       else { btn.textContent = 'Next ›'; btn.dataset.do = 'next'; }
@@ -234,9 +248,9 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
   }
   function blockedByGrading() {
     if (!ungraded()) return false;
-    toast('Grade it first: Y got it · P partly · N missed it', 'info');
+    // point at the grading buttons themselves rather than a toast far from them
     const row = $('.selfgrade', main);
-    if (row) { row.classList.remove('nudge'); void row.offsetWidth; row.classList.add('nudge'); row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+    if (row) { row.classList.add('needed'); row.classList.remove('nudge'); void row.offsetWidth; row.classList.add('nudge'); row.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
     return true;
   }
 
@@ -250,7 +264,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
     draw({ focus: true });
   }
 
-  /** reveal: Ctrl+Enter with nothing entered — show the answer, counted as wrong ("I don't know"). */
+  /** reveal: Enter with nothing entered — show the answer, counted as wrong ("I don't know"). */
   async function submit({ reveal = false } = {}) {
     const question = q();
     const st = entry(s, question.id);
@@ -304,7 +318,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
       s.gradeIdx = 0;
       save();
       toast(auto ? 'Time is up — grade your short answers' : 'Now grade your short answers against the reference', 'info', 4000);
-      renderRun(root, courseId, slot);
+      renderRun(root, courseId, slot, { missedOnly });
       return;
     }
     await finalize();
@@ -333,7 +347,9 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
         if (st.blank || !st.result) continue;
         await recordAttempt(courseId, { qid: id, correct: !!st.result.correct, score: st.result.score, response: st.response, mode: 'exam' });
       }
-      await recordExam(courseId, { title: s.title, ...s.summary });
+      // the sitting goes along, so it can be reviewed from the paper list later
+      const detail = { title: s.title, qids: s.qids, entries: s.entries, points: s.points, timeLimitSec: s.timeLimitSec, startedAt: s.startedAt, finishedAt: s.finishedAt, summary: s.summary };
+      await recordExam(courseId, { title: s.title, ...s.summary, detail });
     } catch (e) { toast(`Not saved: ${e.message}`, 'error'); }
     navigate(page('result'));
   }
@@ -356,8 +372,9 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
   function questionTools(p, mode) {
     const bar = document.createElement('div');
     bar.className = 'q-tools';
-    bar.innerHTML = `<button type="button" class="btn ghost ${p?.starred ? 'on' : ''}" data-act="star" aria-pressed="${!!p?.starred}">${p?.starred ? '★ Starred' : '☆ Star'}<kbd class="key-hint">S</kbd></button>
-      ${mode === 'exam' || !data.course.access?.canEdit ? '' : `<button type="button" class="btn ghost" data-act="reparse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg>Re-parse<kbd class="key-hint">P</kbd></button>`}`;
+    // on touch screens the bar floats at the bottom left as icon-only buttons (the labels stay for screen readers)
+    bar.innerHTML = `<button type="button" class="btn ghost ${p?.starred ? 'on' : ''}" data-act="star" aria-pressed="${!!p?.starred}" aria-label="${p?.starred ? 'Starred' : 'Star'}"><span class="qt-icon" aria-hidden="true">${p?.starred ? '★' : '☆'}</span><span class="qt-label">${p?.starred ? 'Starred' : 'Star'}</span><kbd class="key-hint">S</kbd></button>
+      ${mode === 'exam' || !data.course.access?.canEdit ? '' : `<button type="button" class="btn ghost" data-act="reparse" aria-label="Re-parse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg><span class="qt-label">Re-parse</span><kbd class="key-hint">P</kbd></button>`}`;
     return bar;
   }
 
@@ -410,12 +427,15 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
       renderRun(root, courseId, slot);
     }
     else if (act === 'nav-close') nav.classList.remove('open');
+    else if (act === 'reveal') submit({ reveal: true });
     else if (act === 'star') {
       const question = q();
       const p = data.progress.questions[question.id];
       await setFlags(courseId, { qid: question.id, starred: !p?.starred });
       toast(!p?.starred ? 'Starred' : 'Unstarred');
-      draw();
+      // only the star button and the question list change: redrawing the card would close the keypad and move the page
+      if (main.isConnected && q() === question) $('.q-tools', main)?.replaceWith(questionTools(data.progress.questions[question.id], view().mode));
+      drawNav();
     } else if (act === 'main') {
       const what = t.dataset.do;
       if (what === 'submit') submit();
@@ -440,8 +460,8 @@ export async function renderRun(root, courseId, slot, { reviewIdx } = {}) {
 
   keyHandler = (e) => {
     if (document.querySelector('dialog[open]')) return;
-    // Ctrl/Cmd+Enter in practice: submit, or show the answer when nothing is entered (text fields handle it themselves)
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && view().mode === 'practice' && !e.target.closest?.('textarea, select, dialog')) {
+    // Enter in practice: submit, or show the answer when nothing is entered (text fields handle it themselves)
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey && view().mode === 'practice' && !e.target.closest?.('input, textarea, select, dialog')) {
       e.preventDefault();
       if (entry(s, q().id).submitted) $('[data-act="main"]', root).click(); else submit({ reveal: true });
       return;
@@ -506,7 +526,7 @@ export async function renderResult(root, courseId, slot) {
   const sum = s.summary;
   const isExam = s.module === 'exam';
   const ids = s.qids.filter((id) => data.byId.has(id));
-  const wrongIds = ids.filter((id) => s.entries[id]?.result && !s.entries[id].result.correct);
+  const wrongIds = missedIds(s, data);
   const attempted = ids.filter((id) => s.entries[id]?.result && !s.entries[id].blank).length;
   const acc = pct(sum.correct, attempted || 1);
   const headline = isExam
@@ -531,8 +551,9 @@ export async function renderResult(root, courseId, slot) {
         <p class="hint">Tap a number to review that question with its answer and explanation.</p>
       </section>
       <div class="actions-row">
+        ${wrongIds.length ? `<a class="btn primary" href="#/c/${encodeURIComponent(courseId)}/review-missed/${slot}/0">Review the ${wrongIds.length} missed</a>` : ''}
         <a class="btn ghost" href="#/c/${encodeURIComponent(courseId)}/review/${slot}/0">Review all</a>
-        ${wrongIds.length ? `<button class="btn primary" data-act="retry">Practice the ${wrongIds.length} missed</button>` : ''}
+        ${wrongIds.length ? `<button class="btn ghost" data-act="retry">Practice the ${wrongIds.length} missed</button>` : ''}
         <a class="btn ghost" href="#/c/${encodeURIComponent(courseId)}">Back to course</a>
       </div>
     </div>`;

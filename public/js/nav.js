@@ -41,7 +41,7 @@ export function parentOf(path) {
   const p = cleanPath(path);
   if (p === '/') return null;
   let m;
-  if ((m = /^\/c\/([^/]+)\/review\/(\w+)\/\d+$/.exec(p))) return `/c/${m[1]}/result/${m[2]}`;
+  if ((m = /^\/c\/([^/]+)\/review(?:-missed)?\/(\w+)\/\d+$/.exec(p))) return `/c/${m[1]}/result/${m[2]}`;
   if ((m = /^\/c\/([^/]+)\/.+$/.exec(p))) return `/c/${m[1]}`;
   if (/^\/c\/[^/]+$/.test(p)) return tabHome;
   if (/^\/p\/[^/]+$/.test(p)) return '/'; // a course's public page belongs to the Public tab

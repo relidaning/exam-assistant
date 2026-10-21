@@ -325,6 +325,7 @@ const routes = [
   ['POST', /^\/api\/courses\/([^/]+)\/attempt$/, async (req, user, [id]) => { view(id, user); return store.recordAttempt(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/flag$/, async (req, user, [id]) => { view(id, user); return store.setFlags(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/exam$/, async (req, user, [id]) => { view(id, user); return store.recordExam(id, user.id, await readBody(req)); }],
+  ['GET', /^\/api\/courses\/([^/]+)\/exams\/(\d+)$/, (req, user, [id, eid]) => { view(id, user); return store.examDetail(id, user.id, eid); }],
   ['PUT', /^\/api\/courses\/([^/]+)\/settings$/, async (req, user, [id]) => { view(id, user); return store.setSettings(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/reset-progress$/, (req, user, [id]) => { view(id, user); store.resetProgress(id, user.id); return { ok: true }; }],
 ];

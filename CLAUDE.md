@@ -2,7 +2,7 @@
 
 Local web app for exam prep, with accounts: courses are private or public (owner edits, others practise or fork);
 each user's progress is private. Four tabs: Public, In progress, My courses, Settings. Simple course cards (name, description, countdown) → course page
-with module panels (practice, mistakes, mock exam, starred) and Statistics → an answer flow fitted to each
+with module panels (practice, mock exam, mistakes, starred) and Statistics → an answer flow fitted to each
 question type. All numbers live on the Statistics page. Questions are always shuffled; per-course Settings (chapters,
 types per module, exam composition/duration) decide what each module asks. Theme colour: amber. Node ≥ 20, no framework, no build step.
 

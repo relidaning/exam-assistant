@@ -24,22 +24,38 @@ export async function api(method, url, body) {
   return data;
 }
 
+const TOAST_ICONS = { info: 'i', ok: '✓', warn: '!', error: '✕' };
+
+/** A short notice in the middle of the screen. Taps go through it; it goes away by itself. */
 export function toast(msg, kind = 'info', ms = 2600) {
   let host = $('#toasts');
-  if (!host) { host = document.createElement('div'); host.id = 'toasts'; host.setAttribute('aria-live', 'polite'); document.body.append(host); }
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'toasts';
+    host.setAttribute('aria-live', 'polite');
+    if ('popover' in host) host.popover = 'manual'; // the top layer: shows above an open dialog too
+    document.body.append(host);
+  }
   // the same message already showing: keep that one up a little longer instead of stacking another
-  const same = [...host.children].find((x) => x.textContent === msg && !x.classList.contains('out'));
+  const same = [...host.children].find((x) => x.dataset.msg === msg && !x.classList.contains('out'));
   if (same) { clearTimeout(same._timer); same._timer = setTimeout(() => dismiss(same), ms); return; }
   const el = document.createElement('div');
   el.className = `toast ${kind}`;
-  el.textContent = msg;
+  el.dataset.msg = msg;
+  el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  el.innerHTML = `<span class="toast-ico" aria-hidden="true">${TOAST_ICONS[kind] || TOAST_ICONS.info}</span><span class="toast-msg">${esc(msg)}</span>`;
   host.append(el);
+  if (host.popover) { if (host.matches(':popover-open')) host.hidePopover(); host.showPopover(); } // re-shown so it lands above a dialog opened since
   el._timer = setTimeout(() => dismiss(el), ms);
 }
 
 function dismiss(el) {
   el.classList.add('out');
-  setTimeout(() => el.remove(), 300);
+  setTimeout(() => {
+    const host = el.parentElement;
+    el.remove();
+    if (host?.popover && !host.children.length && host.matches(':popover-open')) host.hidePopover();
+  }, 250);
 }
 
 /**
@@ -57,7 +73,8 @@ export function dialog({ title, body = '', buttons = [{ label: 'OK', value: true
       const i = d.returnValue;
       const form = Object.fromEntries(new FormData(d.querySelector('form')));
       d.remove();
-      const value = i === '' || i == null || i === 'cancel' ? null : buttons[Number(i)]?.value ?? null;
+      // the dialog's own buttons are numbered; a button in the body may close it with a value of its own
+      const value = i === '' || i == null || i === 'cancel' ? null : /^\d+$/.test(i) ? buttons[Number(i)]?.value ?? null : i;
       resolve(withForm ? { value, form } : value);
     });
     d.showModal();
