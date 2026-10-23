@@ -12,8 +12,8 @@ const pub = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../pu
 const svg = fs.readFileSync(path.join(pub, 'icon.svg'), 'utf8');
 const bg = svg.match(/<rect[^>]*fill="([^"]+)"/)[1];
 const art = svg.replace(/^<svg[^>]*>/, '').replace(/<\/svg>\s*$/, '').replace(/<rect[^>]*\/>/, '');
-const square = (scale) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="${bg}"/>`
-  + `<g transform="translate(256 256) scale(${scale}) translate(-256 -256)">${art}</g></svg>`;
+const square = (scale) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="${bg}"/>`
+  + `<g transform="translate(50 50) scale(${scale}) translate(-50 -50)">${art}</g></svg>`;
 
 const icons = [
   ['apple-touch-icon.png', 180, square(1)],

@@ -1,1 +1,30 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#f59e0b"/><path d="M150 140h170a30 30 0 0 1 30 30v202a30 30 0 0 1-30 30H150a30 30 0 0 1-30-30V170a30 30 0 0 1 30-30z" fill="#fff"/><path d="M160 210l22 22 40-44M160 290l22 22 40-44" stroke="#b45309" stroke-width="18" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M250 214h64M250 294h64" stroke="#fcd34d" stroke-width="18" stroke-linecap="round"/><path d="M342 330l60-60 30 30-60 60-40 10z" fill="#78350f"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <!-- Same family as besmart and floatingsphere: dark tile, ring around a glass disc. The ring is twelve questions,
+       nine answered (amber); the disc holds an answer sheet. PNGs: npm run icons -->
+  <rect width="100" height="100" rx="22" fill="#0d0e13"/>
+  <defs><radialGradient id="hl" cx="40" cy="38.75" r="17.5" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#fff" stop-opacity="0.16"/><stop offset="1" stop-color="#fff" stop-opacity="0"/>
+  </radialGradient></defs>
+  <g fill="none" stroke-width="8">
+  <path d="M52.08 16.06 A34 34 0 0 1 65.17 19.57" stroke="#fabf40"/>
+  <path d="M68.77 21.65 A34 34 0 0 1 78.35 31.23" stroke="#fabf40"/>
+  <path d="M80.43 34.83 A34 34 0 0 1 83.94 47.92" stroke="#fabf40"/>
+  <path d="M83.94 52.08 A34 34 0 0 1 80.43 65.17" stroke="#fabf40"/>
+  <path d="M78.35 68.77 A34 34 0 0 1 68.77 78.35" stroke="#fabf40"/>
+  <path d="M65.17 80.43 A34 34 0 0 1 52.08 83.94" stroke="#fabf40"/>
+  <path d="M47.92 83.94 A34 34 0 0 1 34.83 80.43" stroke="#fabf40"/>
+  <path d="M31.23 78.35 A34 34 0 0 1 21.65 68.77" stroke="#fabf40"/>
+  <path d="M19.57 65.17 A34 34 0 0 1 16.06 52.08" stroke="#fabf40"/>
+  <path d="M16.06 47.92 A34 34 0 0 1 19.57 34.83" stroke="#ffffff" stroke-opacity="0.13"/>
+  <path d="M21.65 31.23 A34 34 0 0 1 31.23 21.65" stroke="#ffffff" stroke-opacity="0.13"/>
+  <path d="M34.83 19.57 A34 34 0 0 1 47.92 16.06" stroke="#ffffff" stroke-opacity="0.13"/>
+  </g>
+  <circle cx="50" cy="50" r="25" fill="#14171f"/>
+  <circle cx="50" cy="50" r="25" fill="url(#hl)"/>
+  <circle cx="50" cy="50" r="25" fill="none" stroke="#ffffff" stroke-opacity="0.28" stroke-width="0.8"/>
+  <rect x="37" y="34" width="26" height="32" rx="3" fill="#edf0f5"/>
+  <g fill="none" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M41 43.5l2.5 2.5 4.5-5M41 55.5l2.5 2.5 4.5-5" stroke="#d98a0b"/>
+  <path d="M51.5 44h7M51.5 56h7" stroke="#14171f" stroke-opacity="0.35"/>
+  </g>
+</svg>
