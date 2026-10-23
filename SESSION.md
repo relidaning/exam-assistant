@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-23 — App icon matches BeSmart and FloatingSphere
+The user wanted this app's icon to look like part of a series with their BeSmart and FloatingSphere apps. `public/icon.svg` was redrawn on BeSmart's 100×100 grid and uses the same dark tile (`#0d0e13`), a thick ring around a glass disc, and amber `#fabf40`. Its own touches: the ring has 12 segments (9 amber for "answered", 3 dim), and the disc holds an answer sheet with two ticks. `scripts/icons.mjs` now assumes that 100×100 grid, and the four PNGs were rebuilt (the first `npm run icons` errored, and the second run worked). Committed and pushed as `330ea08`. Phones may keep showing the old icon until the app is re-added to the home screen. Changing the light `background_color` in `manifest.json` to the tile colour was offered but not done.
+
 ## 2026-10-23 — My courses is the first tab and the start page; backlog committed
 The tabs now run My courses, In progress, Public, Settings. My courses lives at `#/` and is where the app opens after sign-in. Public moved to `#/public`, and old `#/courses` links redirect. `nav.js`, `ui.js`, `app.js`, the e2e test, the screenshot script, README and CLAUDE.md were updated to match. When the user asked to commit, all the uncommitted work from earlier sessions (reports, DMs, course history, pins, re-grading, merging on re-parse, streak 5, blanks and skips counted wrong) shared files with this change, so it went into one commit, `3189186`, pushed to `origin/main`. Unit and e2e tests passed before the commit, and the diff was checked for secrets.
 

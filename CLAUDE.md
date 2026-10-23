@@ -23,7 +23,9 @@ types per module, exam composition/duration) decide what each module asks. Theme
   a new account instead of linking) into the real one; refuses if it has progress. Back up first
 - `node scripts/screenshots.mjs` — re-take the README screenshots in `docs/screenshots/` (own server on sample data,
   never the user's)
-- `npm run icons` — re-render the PNG home-screen icons from `public/icon.svg` (iOS can't use SVG touch icons)
+- `npm run icons` — re-render the PNG home-screen icons from `public/icon.svg` (iOS can't use SVG touch icons). The SVG
+  is drawn on a 100×100 grid, which the script expects, in the style of the user's BeSmart/FloatingSphere icons (dark
+  `#0d0e13` tile, segmented amber ring, glass disc): keep that family look when changing it
 
 ## Loading questions (the user's three sources)
 
