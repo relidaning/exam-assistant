@@ -97,8 +97,12 @@ try {
   const page = await newPage({ width: 1280, height: 860 });
   await page.goto(base);
   await page.waitForSelector('.course-tile');
-  check((await page.textContent('.ct-name')).includes('Demo'), 'the Public tab lists the published course');
-  check(await page.$('.search-bar .course-search') && (await page.getAttribute('.tabbar [aria-current="page"]', 'href')) === '#/', 'a search bar on top, the Public tab is current');
+  check((await page.textContent('h1')).includes('My courses') && (await page.getAttribute('.tabbar [aria-current="page"]', 'href')) === '#/', 'signed in, the app opens on My courses');
+  check((await page.$$eval('.tabbar a.tab span', (s) => s.map((x) => x.textContent))).join() === 'My courses,In progress,Public,Settings', 'tabs: My courses first, Public third');
+  await page.click('.tabbar a[href="#/public"]');
+  await page.waitForSelector('.public-tiles .course-tile');
+  check((await page.textContent('.public-tiles .ct-name')).includes('Demo'), 'the Public tab lists the published course');
+  check(await page.$('.search-bar .course-search') && (await page.getAttribute('.tabbar [aria-current="page"]', 'href')) === '#/public', 'a search bar on top, the Public tab is current');
   const side = await page.evaluate(() => { const t = document.querySelector('.tabbar').getBoundingClientRect(), p = document.querySelector('.page').getBoundingClientRect(); return [t.left, t.top, t.height, t.right, p.left, getComputedStyle(document.querySelector('.tabbar')).flexDirection, innerHeight]; });
   check(side[0] === 0 && side[1] === 0 && side[2] === side[6] && side[5] === 'column' && side[4] >= side[3], `on a laptop the tabs are a sidebar on the left, beside the page (${side})`);
   await page.fill('.course-search', 'no such course');
@@ -108,6 +112,7 @@ try {
   check((await page.inputValue('.course-search')) === '' && await page.isVisible('.public-tiles .course-tile') && await page.isHidden('[data-act="clear-search"]'), 'clearing empties the search and brings every course back');
   await page.fill('.course-search', 'demo');
   check(await page.isVisible('.public-tiles .course-tile'), 'and finds them by name');
+  check(!(await page.$('.public-tiles .ct-pin')), 'no pin buttons on the Public tab');
   await page.screenshot({ path: `${shots}/01-home.png` });
   await page.click('.public-tiles .course-tile');
   await page.waitForSelector('.course-meta');
@@ -120,16 +125,24 @@ try {
   await page.screenshot({ path: `${shots}/01b-own-public-page.png`, fullPage: true });
   await page.goBack();
   await page.waitForSelector('.public-tiles');
-  await page.click('.tabbar a[href="#/courses"]');
+  await page.click('.tabbar a.tab[href="#/"]');
   await page.waitForSelector('.course-tile');
   check((await page.textContent('h1')).includes('My courses') && (await page.textContent('.ct-name')).includes('Demo'), 'My courses lists your own course');
+  await page.click('.ct-pin');
+  await page.waitForSelector('.ct-pin.on[aria-pressed="true"]');
+  await page.reload();
+  await page.waitForSelector('.ct-pin.on');
+  check(true, 'a course pinned under My courses stays pinned after a reload');
+  await page.click('.ct-pin.on');
+  await page.waitForSelector('.ct-pin:not(.on)');
+  check(true, 'and unpins');
   await page.click('a.course-tile');
   await page.waitForSelector('.mtile');
   check(!(await page.$('text=Memorize')), 'no memorize module');
   check(!(await page.$('text=By chapter')), 'chapters are not on the hub');
   check(!(await page.$('[data-act="visibility"]')), 'no Publish / Make private on the My courses page, even for the admin');
   check(!(await page.$('[data-act="fork"]')) && (await page.textContent('.status-chip')).includes('In Public'), 'your own course shows its status (In Public), not a Fork button');
-  check(!(await page.$('.mtile[data-mod="questions"]')) && !(await page.$('.mtile[data-mod="settings"]')) && (await page.$$('.tools-row .mtile')).length === 1, 'the hub has the four modules and Statistics (settings moved to the Settings tab)');
+  check(!(await page.$('.mtile[data-mod="questions"]')) && !(await page.$('.mtile[data-mod="settings"]')) && (await page.$$('.mtiles .mtile')).length === 5 && await page.$('.mtile[data-mod="stats"]'), 'the hub has the four modules and Statistics (settings moved to the Settings tab)');
   check(await page.$('.mtile.unset[data-mod="exam"]'), 'exam panel marked "not set up"');
   await page.screenshot({ path: `${shots}/02-course.png`, fullPage: true });
 
@@ -237,6 +250,21 @@ try {
   check(live.length === 16 && live.some((q) => q.stem.includes('(edited)')) && !live.some((q) => q.id === before.id), 're-parsed question replaced in place');
   await putSettings(savedSettings);
 
+  // the course's History lists the edit; tapping it shows what changed
+  await page.goto(`${base}/#/settings/c/demo`);
+  await page.waitForSelector('#history .history-item');
+  check((await page.textContent('#history')).includes('Edited a question'), 'the course settings show the latest changes');
+  await page.click('#history a.btn');
+  await page.waitForSelector('.history-groups .history-item');
+  check(new URL(page.url()).hash === '#/settings/c/demo/history', 'See all changes opens the History page');
+  await page.click('.action-question summary');
+  await page.waitForSelector('.action-question .diff ins');
+  check((await page.textContent('.action-question .diff')).includes('(edited)'), 'a question edit shows before and after');
+  await page.screenshot({ path: `${shots}/16-history.png`, fullPage: true });
+  await page.goBack();
+  await page.waitForSelector('form.settings');
+  check(new URL(page.url()).hash === '#/settings/c/demo', 'Back from History goes to the course settings');
+
   // mistakes
   await page.goto(`${base}/#/c/demo`);
   await page.waitForSelector('.mtile');
@@ -272,7 +300,7 @@ try {
   await page.click('[data-act="exit"]');
   await page.click('dialog.dialog .btn.primary');
   await page.waitForSelector('.mtile');
-  await page.click('.tabbar a[href="#/courses"]');
+  await page.click('.tabbar a.tab[href="#/"]');
   await page.waitForSelector('.course-tile');
   await page.click('a.course-tile');
   await page.waitForSelector('.mtile');
@@ -302,7 +330,27 @@ try {
   check(new URL(page.url()).hash === '#/c/demo', 'back from practice goes to the course page');
   await page.goBack();
   await page.waitForSelector('.course-tile');
-  check(new URL(page.url()).hash === '#/courses', 'then back again goes to the course list it was opened from');
+  check(new URL(page.url()).hash === '#/', 'then back again goes to the course list it was opened from');
+  // Skip in practice: the question counts as wrong and goes to Mistakes
+  await page.click('a.course-tile');
+  await page.waitForSelector('.mtile');
+  await page.click('[data-start="practice"]');
+  await page.waitForSelector('dialog.dialog, .qcard');
+  if (await page.$('dialog.dialog')) await page.click('dialog.dialog .btn.primary');
+  await page.waitForSelector('.qcard');
+  for (let i = 0; i < 20 && !(await page.textContent('[data-act="main"]')).startsWith('Skip'); i++) await page.click('[data-act="main"]');
+  const skipped = await currentQuestion(page);
+  const wrongBefore = (await (await authed(`${base}/api/courses/demo`)).json()).progress.questions[skipped.id]?.wrong || 0;
+  check((await page.getAttribute('[data-act="main"]', 'title')) === 'A skipped question goes to Mistakes', 'the Skip button says where skipped questions go');
+  await page.click('[data-act="main"]');
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('added to Mistakes')));
+  await page.waitForTimeout(300);
+  const skippedNow = (await (await authed(`${base}/api/courses/demo`)).json()).progress.questions[skipped.id];
+  check(skippedNow?.wrong === wrongBefore + 1 && skippedNow.streak === 0, `a skipped question is logged as wrong, so it is in Mistakes (${wrongBefore} → ${skippedNow?.wrong})`);
+  await page.goBack();
+  await page.waitForSelector('.mtile');
+  await page.goBack();
+  await page.waitForSelector('.course-tile');
   const deep = await newPage({ width: 1000, height: 700 });
   await deep.goto(`${base}/#/c/demo/stats`);
   await deep.waitForSelector('.overview');
@@ -533,6 +581,20 @@ try {
   await page.waitForFunction(() => document.querySelector('.nav-cell.current')?.dataset.go === '149');
   [num, seen] = await inSight();
   check(num === '150' && seen, 'and follows it when you jump to the last one');
+  // numbers stay centred with Safari's wide default button padding (iPad / iPhone), 3-digit ones included
+  const offCentre = await page.evaluate(() => {
+    const st = document.createElement('style');
+    st.textContent = 'button { padding: 0 1em }'; // like Safari's own stylesheet
+    document.head.prepend(st);
+    const off = [...document.querySelectorAll('.nav-cell')].map((c) => {
+      const r = document.createRange(); r.selectNodeContents(c.firstChild);
+      const t = r.getBoundingClientRect(), b = c.getBoundingClientRect();
+      return Math.abs(t.left + t.width / 2 - (b.left + b.width / 2));
+    });
+    st.remove();
+    return Math.max(...off);
+  });
+  check(offCentre <= 1, `question numbers are centred in their cells, 3-digit ones too (worst ${offCentre.toFixed(1)}px off)`);
   await clearRound(page, 'drill');
 
   // the In progress tab: every unfinished round, resumable and deletable
@@ -574,8 +636,38 @@ try {
   check(!(await visitor.$('[data-start]')) && await visitor.$('[data-act="fork"]') && !(await visitor.$('[data-act="visibility"]')), "someone else's public course shows its details and Fork; practising needs a fork");
   check((await visitor.textContent('.course-meta')).includes('by tester'), 'and names its owner');
   check((await visitor.textContent('.page')).includes("What's inside") && await visitor.$('.mix'), 'with what is in it');
+  await visitor.waitForSelector('.owner-card a.btn');
+  check((await visitor.textContent('.owner-card')).includes('tester') && (await visitor.textContent('.owner-card')).includes('Member since'), "the course page shows who made it");
   await visitor.screenshot({ path: `${shots}/44-public-course.png`, fullPage: true });
-  await visitor.goto(`${base}/#/`);
+  // write to the owner from there: a chat like a messaging app
+  await visitor.click('.owner-card a.btn');
+  await visitor.waitForSelector('.chat-compose textarea');
+  check(new URL(visitor.url()).hash.startsWith('#/messages/u/tester?course=demo') && (await visitor.textContent('.chat-about')).includes('Demo'), 'Message opens a chat with the owner, about this course');
+  check(await visitor.isDisabled('.send-btn'), 'the send button waits for a message');
+  await visitor.fill('.chat-compose textarea', 'Hi! Where are these questions from?');
+  await visitor.click('.send-btn');
+  await visitor.waitForSelector('.msg.mine .tick:not(.read)');
+  check((await visitor.textContent('.msg.mine')).includes('About “Demo”') && !(await visitor.$('.chat-about')), 'the message is sent (one tick), marked with the course');
+  const ownerDm = await newPage({ width: 1280, height: 860 });
+  await ownerDm.goto(`${base}/#/messages`);
+  await ownerDm.waitForSelector('.msg-row.unread[href="#/messages/u/visitor"]');
+  check(!(await ownerDm.isHidden('.inbox-badge')), "the owner's bell counts it");
+  await ownerDm.click('.msg-row[href="#/messages/u/visitor"]');
+  await ownerDm.waitForSelector('.msg.theirs');
+  check(await ownerDm.isVisible('.chat-side .conv.current'), 'on a wide screen the conversations are listed beside the chat');
+  await ownerDm.fill('.chat-compose textarea', 'From past papers');
+  await ownerDm.keyboard.press('Enter');
+  await ownerDm.waitForSelector('.msg.mine .tick');
+  check(true, 'the owner answers (Enter sends)');
+  await ownerDm.screenshot({ path: `${shots}/48-dm.png` });
+  await ownerDm.close();
+  await visitor.waitForSelector('.msg.theirs', { timeout: 10000 });
+  check((await visitor.textContent('.msg.theirs')).includes('From past papers'), "the answer appears in the visitor's open chat by itself");
+  await visitor.waitForSelector('.msg.mine .tick.read', { timeout: 10000 });
+  check(true, 'and their own message shows as read (✓✓)');
+  await visitor.goto(`${base}/#/c/demo`);
+  await visitor.waitForSelector('.fork-cta');
+  await visitor.goto(`${base}/#/public`);
   await visitor.waitForSelector('.public-tiles .course-tile');
   check((await visitor.textContent('.public-tiles')).includes('Demo'), 'the public course is listed under Public');
   await visitor.screenshot({ path: `${shots}/41-public-courses.png` });
@@ -586,7 +678,7 @@ try {
   await visitor.goto(`${base}/#/progress`);
   await visitor.waitForSelector('.card.empty');
   check(!(await visitor.$('.round')), "the owner's unfinished rounds are not shown to others");
-  await visitor.goto(`${base}/#/`);
+  await visitor.goto(`${base}/#/public`);
   await visitor.waitForSelector('.public-tiles .course-tile');
   await visitor.click('.public-tiles .course-tile');
   await visitor.waitForSelector('.fork-cta [data-act="fork"]');
@@ -600,14 +692,61 @@ try {
   await visitor.click('[data-start="practice"]');
   await visitor.waitForSelector('.qcard');
   check(await visitor.$('[data-act="reparse"]') && await visitor.$('[data-act="star"]'), 'your fork is yours: Re-parse and Star');
+  check(await visitor.$('.q-tools [data-act="report"]'), 'and Report, to tell the original owner about a mistake');
   await visitor.goBack();
   await visitor.waitForSelector('.mtile');
   await visitor.goBack();
   await visitor.waitForSelector('.course-tile');
-  check(new URL(visitor.url()).hash === '#/courses', 'the fork sits under My courses');
+  check(new URL(visitor.url()).hash === '#/', 'the fork sits under My courses');
   await visitor.goto(`${base}/#/c/demo`);
   await visitor.waitForSelector('[data-open-fork]');
   check(true, 'the original then points to your copy');
+  // a mistake in a question goes to the original's owner, who answers it under Messages (in a tab of its own)
+  const vr = await visitor.context().newPage();
+  await vr.goto(`${base}/#/c/demo-visitor/run/practice`);
+  await vr.waitForSelector('.qcard');
+  await vr.click('.q-tools [data-act="report"]');
+  await vr.waitForSelector('.report-dialog textarea');
+  check((await vr.textContent('.report-dialog')).includes('tester'), 'the report dialog names who gets it');
+  await vr.click('.report-kinds input[value="answer"]');
+  await vr.fill('.report-dialog textarea', 'I think the answer is wrong here');
+  await vr.screenshot({ path: `${shots}/45-report.png` });
+  await vr.click('.report-dialog [data-act="send"]');
+  await vr.waitForSelector('.report-dialog', { state: 'detached' });
+  const owner = await newPage({ width: 1280, height: 860 });
+  await owner.goto(`${base}/#/`);
+  await owner.waitForSelector('.inbox-btn .inbox-badge:not([hidden])');
+  check((await owner.textContent('.inbox-badge')).trim() === '1', 'the owner sees a new message on the bell');
+  await owner.click('.inbox-btn');
+  await owner.waitForSelector('.report-row.unread');
+  check((await owner.textContent('.report-row')).includes('from visitor'), 'the report is in their Messages, marked new');
+  await owner.screenshot({ path: `${shots}/46-messages.png` });
+  await owner.click('.report-row');
+  await owner.waitForSelector('.msg-reply');
+  check((await owner.textContent('.msg-text')).includes('answer is wrong') && await owner.$('.msg-current .qcard') && await owner.$('[data-act="edit"]'), 'tapping it shows the report, the question with its answer, and Edit question');
+  check(await owner.isHidden('.inbox-badge'), 'opening it reads it');
+  await owner.click('.status-pick input[value="declined"] + span');
+  await owner.fill('.msg-reply textarea', 'Checked: the answer is right');
+  await owner.screenshot({ path: `${shots}/47-message-reply.png`, fullPage: true });
+  await owner.click('.msg-reply [type="submit"]');
+  await owner.waitForSelector('.report-row .pill.status-declined');
+  check(new URL(owner.url()).hash === '#/messages', 'sending the answer goes back to the list, marked No change');
+  await owner.close();
+  await vr.goto(`${base}/#/messages`);
+  await vr.waitForSelector('.report-row.unread');
+  check(!(await vr.isHidden('.inbox-badge')), "the reporter's bell shows the answer arrived");
+  await vr.click('.report-row');
+  await vr.waitForSelector('.msg-answer');
+  check((await vr.textContent('.msg-answer')).includes('Checked: the answer is right'), 'the reporter reads the answer');
+  // and from a mock exam, while it is being answered
+  await vr.evaluate(async (qids) => {
+    await fetch('/api/courses/demo-visitor/sessions/exam', { method: 'PUT', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ courseId: 'demo-visitor', module: 'exam', slot: 'exam', title: 'Mock exam', qids, idx: 0, entries: {}, instant: false, startedAt: Date.now(), timeLimitSec: 0, phase: 'answering' }) });
+  }, Object.keys(bank).slice(0, 2));
+  await vr.goto(`${base}/#/c/demo-visitor/run/exam`);
+  await vr.waitForSelector('.run.is-exam .qcard');
+  check(await vr.isVisible('.q-tools [data-act="report"]') && !(await vr.isVisible('[data-act="reparse"]')), 'Report is there in a mock exam too (Re-parse is not)');
+  await vr.close();
   const ownerList = await (await authed(`${base}/api/courses`)).json();
   check(!ownerList.some((c) => c.id === 'demo-visitor'), 'the fork stays private to its owner');
   await visitor.click('[data-act="account"]');
@@ -643,7 +782,7 @@ try {
   // a round with a long title must not widen the In progress page
   const longRound = { courseId: 'demo', module: 'exam', slot: 'exam', title: `Mock exam ${'很长的试卷名称'.repeat(8)}`, qids: Object.keys(bank).slice(0, 3), idx: 0, entries: {}, startedAt: Date.now(), phase: 'answering' };
   await authed(`${base}/api/courses/demo/sessions/exam`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(longRound) });
-  for (const [tab, sel, shot] of [['/progress', '.round[data-slot="exam"]', '23-phone-progress'], ['/settings', '.signin-list', '24-phone-settings'], ['/courses', '.course-tile', '25-phone-mine']]) {
+  for (const [tab, sel, shot] of [['/progress', '.round[data-slot="exam"]', '23-phone-progress'], ['/settings', '.signin-list', '24-phone-settings'], ['/', '.course-tile', '25-phone-mine']]) {
     await phone.goto(`${base}/#${tab}`);
     await phone.waitForSelector(sel);
     const bar = await phone.evaluate(() => { const r = document.querySelector('.tabbar').getBoundingClientRect(); return [r.bottom, window.innerHeight, getComputedStyle(document.querySelector('.tabbar')).position]; });
@@ -694,6 +833,42 @@ try {
   check(Math.abs(toastBox[0]) < 30 && Math.abs(toastBox[1]) < 30, `phone: the notice is centred on the screen (${toastBox})`);
   check(toastBox[3] < 60 && toastBox[2] < 250 && toastBox[5] < 60 && toastBox[4] < 250, `phone: the notice is a small badge, nothing around it covers the screen (${toastBox.slice(2)})`);
   await phone.screenshot({ path: `${shots}/27-phone-toast.png` });
+  // phone: Messages fit the screen
+  for (const [hash, sel] of [['/messages', '.report-row'], [`/messages/${(await (await authed(`${base}/api/reports`)).json()).received[0].id}`, '.msg-reply']]) {
+    await phone.goto(`${base}/#${hash}`);
+    await phone.waitForSelector(sel);
+    check(await noOverflow(), `no horizontal overflow on phone (${hash.split('/').length > 2 ? 'a message' : 'messages'})`);
+  }
+  await phone.screenshot({ path: `${shots}/28-phone-message.png`, fullPage: true });
+  await phone.goto(`${base}/#/messages/u/visitor`);
+  await phone.waitForSelector('.chat-compose');
+  check(await noOverflow(), 'no horizontal overflow on phone (a conversation)');
+  const chatBox = await phone.evaluate(() => [Math.round(document.querySelector('.chat-compose').getBoundingClientRect().bottom), innerHeight, getComputedStyle(document.querySelector('.tabbar')).display, getComputedStyle(document.querySelector('.chat-back')).display]);
+  check(Math.abs(chatBox[0] - chatBox[1]) < 2 && chatBox[2] === 'none' && chatBox[3] !== 'none', `phone: the chat fills the screen, message box at the bottom, Back instead of the tab bar (${chatBox})`);
+  const topGap = await phone.evaluate(() => Math.round(document.querySelector('.chat-list li').getBoundingClientRect().top - document.querySelector('.chat-bar').getBoundingClientRect().bottom));
+  check(topGap >= 0 && topGap < 30, `phone: the messages start right under the header, not at the bottom (${topGap}px)`);
+  const dayMoves = await phone.evaluate(async () => {
+    const list = document.querySelector('.chat-list'), sc = document.querySelector('.chat-scroll'), pill = document.querySelector('.chat-day');
+    list.style.paddingBottom = '2000px'; // room to scroll
+    const before = pill.getBoundingClientRect().top;
+    sc.scrollTop = 300;
+    await new Promise(requestAnimationFrame);
+    const moved = before - pill.getBoundingClientRect().top;
+    list.style.paddingBottom = ''; sc.scrollTop = sc.scrollHeight;
+    return Math.round(moved);
+  });
+  check(dayMoves === 300, `phone: the date pill scrolls away with the messages (moved ${dayMoves}px of 300)`);
+  await phone.tap('.chat-back');
+  await phone.waitForSelector('.report-row');
+  check(await phone.isVisible('.tabbar'), 'phone: Back leaves the chat and the tab bar returns');
+  await phone.goto(`${base}/#/messages/u/visitor`);
+  await phone.waitForSelector('.chat-compose');
+  await phone.screenshot({ path: `${shots}/29b-phone-dm.png` });
+  await phone.goto(`${base}/#/settings/c/demo/history`);
+  await phone.waitForSelector('.history-item');
+  await phone.click('.action-question summary');
+  check(await noOverflow(), 'no horizontal overflow on phone (history)');
+  await phone.screenshot({ path: `${shots}/29-phone-history.png`, fullPage: true });
   // phone: Enter in a written answer starts a new line instead of submitting
   await putSettings({ practice: { types: ['short'] } });
   await clearRound(phone, 'practice');

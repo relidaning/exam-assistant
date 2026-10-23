@@ -1,18 +1,19 @@
 // Hierarchical navigation: Back (button, swipe, gesture) always goes to the parent page, never to "whatever came before".
 // The browser history stack is kept equal to the current page's ancestor chain, e.g.
-//   #/  →  #/courses  →  #/c/<id>  →  #/c/<id>/run/<slot>
+//   #/  →  #/c/<id>  →  #/c/<id>/run/<slot>
 // Going down pushes one entry; going up or sideways first rewinds history to the common ancestor.
-// The four tabs are children of the first one (Public, "/"); a course page belongs to the tab it was opened from,
-// a course's public page (#/p/<id>) to Public.
+// The four tabs are children of the first one (My courses, "/"); a course page belongs to the tab it was opened from,
+// a course's public page (#/p/<id>) to Public (#/public). Messages (#/messages) also belong to the tab they were opened from.
 
-export const TABS = ['/', '/progress', '/courses', '/settings'];
-let tabHome = (() => { try { return sessionStorage.getItem('exam.tab') || '/'; } catch { return '/'; } })();
+export const TABS = ['/', '/progress', '/public', '/settings'];
+let tabHome = (() => { try { const t = sessionStorage.getItem('exam.tab'); return TABS.includes(t) ? t : '/'; } catch { return '/'; } })();
 
 /** The tab a page sits under (course pages: the tab they were opened from). */
 export function tabOf(path) {
   const p = cleanPath(path);
-  if (p.startsWith('/c/')) return tabHome;
-  if (p === '/import') return '/courses';
+  if (p.startsWith('/c/') || p === '/messages' || p.startsWith('/messages/')) return tabHome;
+  if (p === '/import') return '/';
+  if (/^\/p\/[^/]+$/.test(p)) return '/public';
   return TABS.find((t) => t !== '/' && (p === t || p.startsWith(`${t}/`))) || '/';
 }
 
@@ -43,9 +44,11 @@ export function parentOf(path) {
   let m;
   if ((m = /^\/c\/([^/]+)\/review(?:-missed)?\/(\w+)\/\d+$/.exec(p))) return `/c/${m[1]}/result/${m[2]}`;
   if ((m = /^\/c\/([^/]+)\/.+$/.exec(p))) return `/c/${m[1]}`;
-  if (/^\/c\/[^/]+$/.test(p)) return tabHome;
-  if (/^\/p\/[^/]+$/.test(p)) return '/'; // a course's public page belongs to the Public tab
-  if (p === '/import') return '/courses';
+  if (/^\/c\/[^/]+$/.test(p) || p === '/messages') return tabHome;
+  if (p.startsWith('/messages/')) return '/messages';
+  if (/^\/p\/[^/]+$/.test(p)) return '/public'; // a course's public page belongs to the Public tab
+  if (p === '/import') return '/';
+  if ((m = /^(\/settings\/c\/[^/]+)\/history$/.exec(p))) return m[1];
   if (p.startsWith('/settings/')) return '/settings';
   return '/';
 }

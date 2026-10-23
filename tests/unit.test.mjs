@@ -307,6 +307,12 @@ test('sqlite: JSON data from the old storage is migrated once and backed up', as
   assert.equal(run().trim().split('\n').length, 1, 'second start does not migrate again');
 });
 
+test('markdown parser: an option marked with a full-width comma ("D，")', () => {
+  const { questions } = parseMarkdown('8.全面依法治国的总抓手是(     )。\nA.甲，乙\nB.甲   C.乙\nD，丙\n答案: B');
+  assert.equal(questions[0].stem, '全面依法治国的总抓手是(     )。');
+  assert.deepEqual(questions[0].options, ['甲，乙', '甲', '乙', '丙']);
+});
+
 test('parser keeps each question\'s source block and file line', () => {
   const src = '---\ncourse: x\n---\n# Ch\n\n1. first?\nA. a\nB. b\n答案：A\n\n2. second ____\n答案：yes\n';
   const { questions } = parseMarkdown(src);
@@ -366,10 +372,17 @@ test('re-parse: progress follows the question to its new id; the note\'s fixed v
     // a later re-import of the fixed note matches the re-parsed question instead of adding a duplicate
     const again = store.importQuestions(c.id, pm(fs.readFileSync(note, 'utf8')).questions.map((q) => ({ ...q, _file: note })));
     assert.equal(again.added, 0);
-    // re-parsing into a copy of another question is refused
+    // re-parsing into a copy of another question merges the two: the other one stays, with both questions' progress
     const other = qs[1];
-    const dup = await fetch(`${base}/${saved.question.id}/reparse`, { method: 'POST', headers: { 'content-type': 'application/json', cookie }, body: JSON.stringify({ content: (await call('GET', `${base}/${other.id}/source`)).raw, type: other.type, save: true }) });
-    assert.equal(dup.status, 409);
+    store.setFlags(c.id, owner.id, { qid: other.id, starred: true });
+    const merged = await call('POST', `${base}/${saved.question.id}/reparse`, { content: (await call('GET', `${base}/${other.id}/source`)).raw, type: other.type, save: true });
+    assert.equal(merged.question.id, other.id);
+    assert.deepEqual(store.getCourse(c.id).questions.map((q) => q.id), [other.id], 'the edited copy is gone');
+    const pm2 = store.getProgress(c.id, owner.id).questions;
+    assert.equal(pm2[saved.question.id], undefined);
+    assert.equal(pm2[other.id].starred, true, 'the star stays');
+    assert.equal(pm2[other.id].correct + pm2[other.id].wrong, 1, 'the edited copy\'s answer is now the twin\'s');
+    assert.match(store.courseHistory(c.id).entries[0].summary, /^Merged a duplicate/);
   } finally {
     server.close();
   }
@@ -384,9 +397,16 @@ test('questions without stored source are rebuilt as Markdown that parses back t
     { stem: 'Speed?', answer: [{ label: 'v', value: 10, unit: 'm/s', tol: 0.5 }] },
     { stem: 'Explain', answer: 'Line one\nLine two', keywords: ['one', 'two'] },
   ]).questions;
+  const { detectFormat, parsePayload } = await import('../lib/importer.mjs');
   for (const q of samples) {
-    const back = normalizeAll(parseMarkdown(toMarkdown(q)).questions).questions[0];
-    assert.deepEqual(back, q, toMarkdown(q));
+    const md = toMarkdown(q);
+    assert.equal(detectFormat(md), 'md', `the rebuilt text starts with its type tag, "[${q.type}]", and is still Markdown`);
+    const back = normalizeAll(parsePayload(md, detectFormat(md)).questions).questions[0]; // the way Re-parse reads it
+    assert.deepEqual(back, q, md);
+  }
+  // pasted text: JSON only when it is JSON, or broken but clearly meant as JSON
+  for (const [text, format] of [['[{"stem":"x"}]', 'json'], ['{"questions":[]}', 'json'], ['[{"stem": oops', 'json'], ['[[Note]] what?', 'md'], ['[link](u) q?', 'md']]) {
+    assert.equal(detectFormat(text), format, text);
   }
 });
 
@@ -635,6 +655,233 @@ test('accounts: private progress, public courses, publish, fork', async () => {
   }
 });
 
+test('reports: a learner reports a question from their fork, the owner fixes it and answers', async () => {
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = async (username, password = 'secret1') => {
+    let res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    if (res.status === 401) res = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return async (method, url, body) => {
+      const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+  };
+  try {
+    const olga = await as('olga');
+    const lena = await as('lena');
+    const eve = await as('eve');
+    const c = (await olga('POST', '/api/courses', { name: 'Report Bank' })).body;
+    await olga('POST', `/api/courses/${c.id}/import`, { content: JSON.stringify([{ stem: 'Capital of France?', options: ['Paris', 'Rome'], answer: 'B' }]) });
+    store.updateCourse(c.id, { visibility: 'public' });
+    const own = (await olga('GET', `/api/courses/${c.id}`)).body.course;
+    assert.equal(own.reportTo, null, 'nobody to report to in your own course');
+    const qid = own.questions[0].id;
+
+    // lena practises her fork; a report from it goes to olga's course
+    const fork = (await lena('POST', `/api/courses/${c.id}/fork`, {})).body;
+    await lena('POST', `/api/courses/${fork.id}/attempt`, { qid, correct: false });
+    assert.deepEqual((await lena('GET', `/api/courses/${fork.id}`)).body.course.reportTo, { id: c.id, name: 'Report Bank', owner: { id: own.owner.id, username: 'olga' } });
+    assert.deepEqual((await lena('GET', `/api/courses/${fork.id}/questions/${qid}/report`)).body, { target: { id: c.id, name: 'Report Bank', owner: { id: own.owner.id, username: 'olga' } }, exists: true, openId: null });
+    assert.equal((await lena('POST', `/api/courses/${fork.id}/questions/${qid}/report`, { kind: 'answer', message: '  ' })).status, 400, 'an empty report');
+    const sent = await lena('POST', `/api/courses/${fork.id}/questions/${qid}/report`, { kind: 'answer', message: 'The answer should be A (Paris)' });
+    assert.equal(sent.status, 200);
+    assert.deepEqual([sent.body.status, sent.body.role, sent.body.kind, sent.body.course.id], ['open', 'reporter', 'answer', c.id]);
+    assert.equal((await lena('POST', `/api/courses/${fork.id}/questions/${qid}/report`, { message: 'again' })).status, 409, 'one open report per question');
+    assert.equal((await eve('GET', `/api/reports/${sent.body.id}`)).status, 404, "someone else's report");
+    assert.equal((await olga('POST', `/api/courses/${c.id}/questions/${qid}/report`, { message: 'x' })).status, 400, 'the owner fixes it instead');
+
+    // olga sees it as new in her messages; opening it marks it read
+    assert.equal((await olga('GET', '/api/reports/unread')).body.count, 1);
+    const inbox = (await olga('GET', '/api/reports')).body;
+    assert.deepEqual([inbox.received.length, inbox.received[0].reporter, inbox.received[0].unread, inbox.sent.length], [1, 'lena', true, 0]);
+    const opened = (await olga('GET', `/api/reports/${sent.body.id}`)).body;
+    assert.deepEqual([opened.role, opened.message, opened.question.id, opened.changed], ['owner', 'The answer should be A (Paris)', qid, false]);
+    assert.equal((await olga('GET', '/api/reports/unread')).body.count, 0);
+    assert.equal((await lena('PATCH', `/api/reports/${sent.body.id}`, { status: 'fixed' })).status, 403, 'only the owner answers');
+
+    // she fixes the question (it gets a new id) and answers; the report follows the question
+    const fixed = (await olga('POST', `/api/courses/${c.id}/questions/${qid}/reparse`, { content: 'Capital of France?\nA. Paris\nB. Rome\nC. Berlin\n答案：A', save: true })).body.question;
+    assert.notEqual(fixed.id, qid);
+    assert.equal((await olga('PATCH', `/api/reports/${sent.body.id}`, { status: 'nope' })).status, 400);
+    const answered = (await olga('PATCH', `/api/reports/${sent.body.id}`, { status: 'fixed', reply: 'Thanks, fixed' })).body;
+    assert.deepEqual([answered.status, answered.reply, answered.qid, answered.changed], ['fixed', 'Thanks, fixed', fixed.id, true]);
+
+    // lena gets the answer, and can take the fixed version into her fork, keeping her progress
+    assert.equal((await lena('GET', '/api/reports/unread')).body.count, 1);
+    const back = (await lena('GET', `/api/reports/${sent.body.id}`)).body;
+    assert.deepEqual([back.reply, back.status, back.canApply, back.fromCourse.id], ['Thanks, fixed', 'fixed', true, fork.id]);
+    const applied = (await lena('POST', `/api/reports/${sent.body.id}/apply`)).body;
+    assert.deepEqual([applied.courseId, applied.oldId, applied.question.id], [fork.id, qid, fixed.id]);
+    const fv = (await lena('GET', `/api/courses/${fork.id}`)).body;
+    assert.deepEqual([fv.course.questions.map((q) => q.id), fv.progress.questions[fixed.id].wrong], [[fixed.id], 1]);
+    assert.equal((await lena('GET', `/api/reports/${sent.body.id}`)).body.canApply, false, 'up to date now');
+    assert.equal((await lena('POST', `/api/reports/${sent.body.id}/apply`)).status, 409);
+    assert.equal((await lena('GET', '/api/reports/unread')).body.count, 0);
+
+    // a report on a question that changed upstream can't be sent; the reporter withdraws hers, the owner can't
+    const other = (await lena('POST', `/api/courses/${fork.id}/import`, { content: JSON.stringify([{ stem: 'only in my copy', answer: 'x' }]) })).body;
+    assert.equal(other.added, 1);
+    const mineOnly = (await lena('GET', `/api/courses/${fork.id}`)).body.course.questions.find((q) => q.stem === 'only in my copy').id;
+    assert.equal((await lena('POST', `/api/courses/${fork.id}/questions/${mineOnly}/report`, { message: 'hm' })).status, 409);
+    assert.equal((await olga('DELETE', `/api/reports/${sent.body.id}`)).status, 403);
+    assert.equal((await lena('DELETE', `/api/reports/${sent.body.id}`)).status, 200);
+    assert.deepEqual((await olga('GET', '/api/reports')).body.received, []);
+  } finally {
+    server.close();
+  }
+});
+
+test('fixing an answer key grades again what was answered: log, mistakes book, past sittings and rounds', () => {
+  const c = store.createCourse({ name: 'Regrade Bank' });
+  store.importQuestions(c.id, [
+    { stem: 'Prompt of user mode?', options: ['switch>', 'switch#', 'switch', 'none'], answer: 'D' },
+    { stem: 'Other question?', options: ['a', 'b'], answer: 'A' },
+    { stem: 'Explain it.', type: 'short', answer: 'because' },
+  ]);
+  const [q, other, open] = store.getCourse(c.id).questions;
+  const uid = 4242;
+  // answered A (index 0): wrong by the old key, in a mock exam and once in practice
+  store.recordAttempt(c.id, uid, { qid: q.id, correct: false, score: 0, response: 0, mode: 'exam' });
+  store.recordAttempt(c.id, uid, { qid: other.id, correct: true, score: 1, response: 0, mode: 'exam' });
+  store.recordAttempt(c.id, uid, { qid: open.id, correct: false, score: 0, response: 'dunno', mode: 'exam' });
+  const entries = { [q.id]: { response: 0, submitted: true, result: { correct: false, score: 0 } }, [other.id]: { response: 0, submitted: true, result: { correct: true, score: 1 } },
+    [open.id]: { response: 'dunno', submitted: true, selfGrade: 'wrong', result: { correct: false, score: 0 } } };
+  const summary = scoreExam([q, other, open], { [q.id]: entries[q.id].result, [other.id]: entries[other.id].result, [open.id]: entries[open.id].result });
+  const sat = store.recordExam(c.id, uid, { title: 'P', ...summary, detail: { qids: [q.id, other.id, open.id], entries, summary } });
+  store.saveSession(c.id, uid, 'exam', { module: 'exam', qids: [q.id, other.id, open.id], entries, phase: 'done', summary: { ...summary, durationSec: 60 } });
+  store.saveSession(c.id, uid, 'practice', { module: 'practice', qids: [q.id], entries: { [q.id]: { response: 0, submitted: true, result: { correct: false, score: 0 } } }, phase: 'answering' });
+  assert.equal(store.getProgress(c.id, uid).exams[0].score, summary.score);
+  assert.ok(store.inWrongBook(store.getProgress(c.id, uid).questions[q.id]));
+
+  // the key is fixed to A (same stem and options: same id)
+  store.patchQuestion(c.id, q.id, { answer: 0 });
+  const p = store.getProgress(c.id, uid);
+  assert.deepEqual([p.questions[q.id].correct, p.questions[q.id].wrong, p.questions[q.id].streak, p.questions[q.id].history], [1, 0, 1, [1]], 'the answer log and summary follow the key');
+  assert.ok(!store.inWrongBook(p.questions[q.id]), 'out of the mistakes book');
+  assert.equal(p.questions[open.id].wrong, 1, 'a self-graded written answer keeps its grade');
+  const pts = summary.byType.single.maxScore / 2;
+  assert.equal(p.exams[0].score, summary.score + pts, 'the sitting scores the point');
+  const detail = store.examDetail(c.id, uid, sat.id);
+  assert.deepEqual([detail.entries[q.id].result.correct, detail.summary.correct, detail.summary.score], [true, 2, summary.score + pts], 'its review shows it right');
+  const rounds = store.getSessions(c.id, uid);
+  assert.deepEqual([rounds.exam.entries[q.id].result.correct, rounds.exam.summary.score, rounds.exam.summary.durationSec], [true, summary.score + pts, 60], 'the finished round too, keeping its time');
+  assert.equal(rounds.practice.entries[q.id].result.correct, true, 'and an answer in an unfinished round');
+
+  // a fix that changes the question's id (an option edited): sittings and rounds follow it to the new id
+  const fixed = normalizeQuestion({ stem: 'Prompt of user mode?', options: ['switch>', 'switch#', 'switch', 'none of these'], answer: 'B' });
+  store.replaceQuestion(c.id, q.id, fixed);
+  const d2 = store.examDetail(c.id, uid, sat.id);
+  assert.deepEqual([d2.qids[0], d2.entries[fixed.id].result.correct, q.id in d2.entries], [fixed.id, false, false], 'the sitting points at the new id, graded by the new key');
+  const r2 = store.getSessions(c.id, uid);
+  assert.deepEqual([r2.exam.qids[0], r2.exam.entries[fixed.id]?.response, r2.practice.qids[0], fixed.id in r2.practice.entries], [fixed.id, 0, fixed.id, false], 'a finished round keeps the answer, an unfinished one asks again');
+  assert.equal(store.getProgress(c.id, uid).questions[fixed.id].wrong, 1);
+  store.deleteCourse(c.id);
+});
+
+test('course history: every change is listed with who made it; only for whoever may manage the course', async () => {
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = async (username, password = 'secret1') => {
+    let res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    if (res.status === 401) res = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return async (method, url, body) => {
+      const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+  };
+  try {
+    const hana = await as('hana');
+    const ivo = await as('ivo');
+    const c = (await hana('POST', '/api/courses', { name: 'History Bank' })).body;
+    await hana('POST', `/api/courses/${c.id}/import`, { content: JSON.stringify([{ stem: 'One?', options: ['a', 'b'], answer: 'A' }, { stem: 'Two?', options: ['a', 'b'], answer: 'B' }]), filename: 'paper.json' });
+    await hana('PATCH', `/api/courses/${c.id}`, { name: 'History Bank 2', examDate: '2027-01-10' });
+    const [one, two] = (await hana('GET', `/api/courses/${c.id}`)).body.course.questions;
+    await hana('POST', `/api/courses/${c.id}/questions/${one.id}/reparse`, { content: 'One?\nA. a\nB. b\n答案：B', save: true });
+    await hana('DELETE', `/api/courses/${c.id}/questions/${two.id}`);
+    await hana('PUT', `/api/courses/${c.id}/settings`, { practice: { count: 20 } });
+    await hana('PUT', `/api/courses/${c.id}/settings`, { practice: { count: 20 } }); // the same again: nothing changed
+    await hana('PUT', `/api/courses/${c.id}/settings`, { practice: { count: 30 } }); // tweaked again soon after: the same entry
+    store.updateCourse(c.id, { visibility: 'public' });
+
+    const h = (await hana('GET', `/api/courses/${c.id}/history`)).body;
+    assert.deepEqual(h.entries.map((e) => e.action).reverse(), ['created', 'import', 'details', 'question', 'question-deleted', 'settings', 'published']);
+    assert.equal(h.total, 7);
+    const by = Object.fromEntries(h.entries.map((e) => [e.action, e]));
+    assert.deepEqual([by.import.by, by.import.summary], ['hana', 'Imported from paper.json: 2 added']);
+    assert.deepEqual(by.details.detail.fields, { name: { before: 'History Bank', after: 'History Bank 2' }, examDate: { before: null, after: '2027-01-10' } });
+    assert.deepEqual([by.question.detail.before.answer, by.question.detail.after.answer, by.question.summary], [0, 1, 'Edited a question: One?']);
+    assert.equal(by['question-deleted'].detail.before.stem, 'Two?');
+    assert.deepEqual([by.settings.detail.before.practice.count, by.settings.detail.after.practice.count], [0, 30], 'one settings entry, from the first state to the last');
+    assert.equal(by.published.by, null, 'a change made outside the app has no one to name');
+    assert.equal((await hana('GET', `/api/courses/${c.id}/history?limit=2&offset=6`)).body.entries.length, 1, 'a page at a time');
+
+    // others: a public course's history isn't theirs, a private one doesn't exist; their own settings aren't logged
+    await ivo('PUT', `/api/courses/${c.id}/settings`, { practice: { count: 50 } });
+    assert.equal((await ivo('GET', `/api/courses/${c.id}/history`)).status, 403);
+    assert.equal((await hana('GET', `/api/courses/${c.id}/history`)).body.total, 7);
+    const fork = (await ivo('POST', `/api/courses/${c.id}/fork`, {})).body;
+    assert.deepEqual((await ivo('GET', `/api/courses/${fork.id}/history`)).body.entries.map((e) => [e.action, e.by]), [['forked', 'ivo']], 'a fork starts its own history');
+  } finally {
+    server.close();
+  }
+});
+
+test('owners: a public profile on the course page, and direct messages to them', async () => {
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = async (username, password = 'secret1') => {
+    // register first: failed sign-ins count towards the throttle shared by the whole test run
+    let res = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    if (res.status === 409) res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return async (method, url, body) => {
+      const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+  };
+  try {
+    const owen = await as('owen');
+    const pia = await as('pia');
+    const quin = await as('quin');
+    const pub = (await owen('POST', '/api/courses', { name: 'Owen Public', description: 'Networks\nMore about it' })).body;
+    await owen('POST', '/api/courses', { name: 'Owen Private' });
+    store.updateCourse(pub.id, { visibility: 'public' });
+
+    const prof = (await pia('GET', '/api/users/owen')).body;
+    assert.deepEqual([prof.username, prof.courses.map((c) => [c.name, c.summary]), prof.canMessage, prof.isYou], ['owen', [['Owen Public', 'Networks']], true, false], 'public courses only');
+    assert.ok(prof.memberSince);
+    assert.equal((await owen('GET', '/api/users/owen')).body.isYou, true);
+    assert.equal((await pia('GET', '/api/users/nobody')).status, 404);
+
+    // pia writes about his course; quin (no public course) can't be written to out of the blue
+    assert.equal((await pia('POST', '/api/messages/owen', { body: '  ' })).status, 400);
+    assert.equal((await pia('POST', '/api/messages/pia', { body: 'me' })).status, 400, 'not to yourself');
+    assert.equal((await owen('POST', '/api/messages/quin', { body: 'hi' })).status, 403);
+    const sent = (await pia('POST', '/api/messages/owen', { body: 'Is question 3 right?', courseId: pub.id })).body;
+    assert.deepEqual([sent.mine, sent.course, sent.read], [true, { id: pub.id, name: 'Owen Public' }, false]);
+    assert.deepEqual((await owen('GET', '/api/inbox/unread')).body, { count: 1, reports: 0, messages: 1 });
+    const convs = (await owen('GET', '/api/messages')).body;
+    assert.deepEqual(convs.map((c) => [c.with, c.unread, c.last.body, c.last.mine]), [['pia', 1, 'Is question 3 right?', false]]);
+
+    // owen opens it (read), and can answer pia although she has no course of her own
+    const thread = (await owen('GET', '/api/messages/pia')).body;
+    assert.deepEqual([thread.messages.length, thread.messages[0].mine, thread.canMessage], [1, false, true]);
+    assert.equal((await owen('GET', '/api/inbox/unread')).body.count, 0, 'read once opened');
+    assert.equal((await owen('POST', '/api/messages/pia', { body: 'Yes, checked' })).status, 200);
+    const back = (await pia('GET', '/api/messages/owen')).body.messages;
+    assert.deepEqual(back.map((m) => [m.mine, m.body, m.read]), [[true, 'Is question 3 right?', true], [false, 'Yes, checked', false]], 'she sees he read hers');
+    assert.deepEqual((await quin('GET', '/api/messages')).body, [], "other people's conversations are not yours");
+    assert.equal((await quin('GET', '/api/messages/owen')).body.messages.length, 0);
+  } finally {
+    server.close();
+  }
+});
+
 test('migration: a database from before accounts keeps everything, published, for the first account', async () => {
   const { execFileSync } = await import('node:child_process');
   const { DatabaseSync } = await import('node:sqlite');
@@ -768,8 +1015,80 @@ test('a stray sign-in account folds into the real one', () => {
   store.recordAttempt(c.id, busy.id, { qid: store.getCourse(c.id).questions[0].id, correct: true });
   assert.throws(() => store.mergeAccount(busy.id, real.id), /own progress/, 'an account with progress is not merged');
   assert.throws(() => store.mergeAccount(real.id, real.id), /two different/);
-  assert.deepEqual(store.mergeAccount(stray.id, real.id), { identities: 1, courses: 0 });
+  assert.deepEqual(store.mergeAccount(stray.id, real.id), { identities: 1, courses: 0, reports: 0, messages: 0 });
   assert.equal(store.userForIdentity('github', 'merge-777').id, real.id, 'its GitHub now signs in to the real account');
   assert.ok(!store.getUser(stray.id));
   assert.ok(!store.userForToken(token), 'and its sign-ins are gone');
+});
+
+test('pinning: your own courses only, per user, kept apart from study settings', async () => {
+  const server = createServer();
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const as = async (username, password = 'secret1') => {
+    let res = await fetch(`${base}/api/auth/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    if (res.status === 409) res = await fetch(`${base}/api/auth/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ username, password }) });
+    const cookie = res.headers.get('set-cookie').split(';')[0];
+    return async (method, url, body) => {
+      const r = await fetch(base + url, { method, headers: { 'content-type': 'application/json', cookie }, body: body && JSON.stringify(body) });
+      return { status: r.status, body: await r.json() };
+    };
+  };
+  try {
+    const rae = await as('rae');
+    const sol = await as('sol');
+    const a = (await rae('POST', '/api/courses', { name: 'Rae A' })).body;
+    const b = (await rae('POST', '/api/courses', { name: 'Rae B' })).body;
+    store.updateCourse(b.id, { visibility: 'public' });
+    const pinned = async (who) => Object.fromEntries((await who('GET', '/api/courses')).body.map((c) => [c.id, c.pinnedAt]));
+
+    assert.equal((await pinned(rae))[a.id], null);
+    const res = await rae('PUT', `/api/courses/${a.id}/pin`, { pinned: true });
+    assert.equal(res.status, 200);
+    assert.ok(res.body.pinnedAt);
+    assert.equal((await pinned(rae))[a.id], res.body.pinnedAt);
+
+    // saving study settings keeps the pin, and the pin doesn't replace the settings
+    await rae('PUT', `/api/courses/${a.id}/settings`, { exam: { timeMin: 45 } });
+    assert.ok((await pinned(rae))[a.id]);
+    assert.equal(store.getProgress(a.id, (await rae('GET', '/api/auth/me')).body.user.id).settings.exam.timeMin, 45);
+
+    // someone else's (public) course can't be pinned, and your pins aren't theirs
+    assert.equal((await sol('PUT', `/api/courses/${b.id}/pin`, { pinned: true })).status, 403);
+    assert.equal((await pinned(sol))[b.id], null);
+
+    assert.equal((await rae('PUT', `/api/courses/${a.id}/pin`, { pinned: false })).body.pinnedAt, null);
+    assert.equal((await pinned(rae))[a.id], null);
+  } finally {
+    server.close();
+  }
+});
+
+test('mock exam answers left blank count as wrong: past sittings are logged once, starred or not', () => {
+  const c = store.createCourse({ name: 'Blank Bank' });
+  store.importQuestions(c.id, [
+    { stem: 'Left blank?', options: ['a', 'b'], answer: 'A' },
+    { stem: 'Explain the cache.', type: 'short', answer: 'sets and ways' },
+    { stem: 'Answered right?', options: ['a', 'b'], answer: 'B' },
+  ]);
+  const [blank, essay, right] = store.getCourse(c.id).questions;
+  const uid = 4343;
+  store.setFlags(c.id, uid, { qid: essay.id, starred: true });
+  store.recordAttempt(c.id, uid, { qid: right.id, correct: true, score: 1, response: 1, mode: 'exam' });
+  const entries = {
+    [blank.id]: { blank: true, submitted: true, result: { correct: false, score: 0 } },
+    [essay.id]: { blank: true, submitted: true, result: { correct: false, score: 0 } },
+    [right.id]: { response: 1, submitted: true, result: { correct: true, score: 1 } },
+  };
+  const finishedAt = Date.parse('2026-10-20T10:00:00Z');
+  store.recordExam(c.id, uid, { title: 'P', total: 3, score: 1, detail: { qids: [blank.id, essay.id, right.id], entries, finishedAt } });
+
+  assert.equal(store.logBlankExamAnswers({ dryRun: true }).filter((a) => a.course === c.id).length, 2);
+  assert.ok(!store.inWrongBook(store.getProgress(c.id, uid).questions[essay.id]), 'a dry run changes nothing');
+  assert.equal(store.logBlankExamAnswers().filter((a) => a.course === c.id).length, 2);
+  const p = store.getProgress(c.id, uid).questions;
+  assert.ok(store.inWrongBook(p[blank.id]) && store.inWrongBook(p[essay.id]), 'both blanks are in the mistakes book');
+  assert.ok(p[essay.id].starred, 'and the star stays');
+  assert.ok(!store.inWrongBook(p[right.id]));
+  assert.equal(store.logBlankExamAnswers().filter((a) => a.course === c.id).length, 0, 'running it again adds nothing');
 });

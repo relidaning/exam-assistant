@@ -71,17 +71,17 @@ try {
   const desk = await open({ width: 1280, height: 800 });
 
   // desktop: Public, a public course page, Statistics
-  await go(desk, '/', '.public-tiles .course-tile');
+  await go(desk, '/public', '.public-tiles .course-tile');
   await shot(desk, 'desktop-public');
   const visitor = await open({ width: 1280, height: 800 }, { as: visitorToken });
   await go(visitor, `/p/${encodeURIComponent(linalg)}`, '.fork-cta');
   await shot(visitor, 'desktop-public-course');
-  await go(desk, '/courses', '.course-tile'); // so Statistics sits under My courses
+  await go(desk, '/', '.course-tile'); // so Statistics sits under My courses
   await go(desk, `/c/${encodeURIComponent(demo)}/stats`, '.overview');
   await shot(desk, 'desktop-statistics');
 
   // phone: My courses → course → a practice question with feedback, a calculation
-  await go(phone, '/courses', '.course-tile');
+  await go(phone, '/', '.course-tile');
   await phone.tap('.course-tile');
   await shot(phone, 'phone-course', '.mtile');
   await phone.tap('[data-start="practice"]');
@@ -109,7 +109,7 @@ try {
 
   // dark mode
   const dark = await open({ width: 390, height: 844 }, { isMobile: true, hasTouch: true, colorScheme: 'dark' });
-  await go(dark, '/', '.public-tiles .course-tile');
+  await go(dark, '/public', '.public-tiles .course-tile');
   await shot(dark, 'phone-public-dark');
 } finally {
   await browser.close();

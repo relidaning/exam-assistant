@@ -6,8 +6,8 @@ export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 export const esc = escapeHtml;
 
-/** The signed-in user ({ id, username, isAdmin }), null when signed out, undefined until asked. */
-export const auth = { user: undefined, firstUser: false };
+/** The signed-in user ({ id, username, isAdmin }), null when signed out, undefined until asked; unread: reports waiting. */
+export const auth = { user: undefined, firstUser: false, unread: 0 };
 
 export async function api(method, url, body) {
   const res = await fetch(url, {
@@ -144,9 +144,9 @@ export function themeIcon() {
 
 // the four main tabs: a bar along the bottom on phones, a sidebar on the left on wide screens
 const TAB_ITEMS = [
-  ['/', 'Public', '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17M12 3.5a13 13 0 0 0 0 17"/>'],
+  ['/', 'My courses', '<path d="M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3z"/><path d="M5 16.5a3 3 0 0 1 3-3h10.5M9 8.5h6"/>'],
   ['/progress', 'In progress', '<circle cx="12" cy="12" r="8.5"/><path d="M10 8.5v7l5.5-3.5z"/>'],
-  ['/courses', 'My courses', '<path d="M5 4.5h10.5a3 3 0 0 1 3 3v12H8a3 3 0 0 1-3-3z"/><path d="M5 16.5a3 3 0 0 1 3-3h10.5M9 8.5h6"/>'],
+  ['/public', 'Public', '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17M12 3.5a13 13 0 0 0 0 17"/>'],
   ['/settings', 'Settings', '<path d="M4 7h9m4 0h3M4 12h3m4 0h9M4 17h11m4 0h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>'],
 ];
 
@@ -156,11 +156,32 @@ export function tabbar() {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ico}</svg><span>${label}</span></a>`).join('')}</nav>`;
 }
 
+const BELL = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 21h4"/></svg>';
+const inboxLabel = (n) => (n ? `Messages: ${n} new` : 'Messages');
+
+/** Ask the server how many reports and direct messages wait for this user and update every Messages badge on the page. */
+export async function refreshInbox() {
+  if (!auth.user) return;
+  try { auth.unread = (await api('GET', '/api/inbox/unread')).count; } catch { return; }
+  for (const a of $$('.inbox-btn')) {
+    const b = $('.inbox-badge', a);
+    b.hidden = !auth.unread;
+    b.textContent = auth.unread > 9 ? '9+' : auth.unread;
+    a.setAttribute('aria-label', inboxLabel(auth.unread));
+    a.title = inboxLabel(auth.unread);
+  }
+}
+
+// new messages show up on the bell while the app stays open, not only on the next page
+setInterval(() => { if (document.visibilityState === 'visible') refreshInbox(); }, 60000);
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') refreshInbox(); });
+
 export function topbar(crumbs = '') {
   return `<header class="topbar has-tabs">
     <a class="brand" href="#/"><span class="logo" aria-hidden="true">✎</span><span>Exam Assistant</span></a>
     <div class="crumbs">${crumbs}</div>
     <div class="topbar-tools">
+      ${auth.user ? `<a class="icon-btn inbox-btn" href="#/messages" title="${inboxLabel(auth.unread)}" aria-label="${inboxLabel(auth.unread)}">${BELL}<span class="inbox-badge" ${auth.unread ? '' : 'hidden'}>${auth.unread > 9 ? '9+' : auth.unread}</span></a>` : ''}
       <button class="icon-btn" data-setting="theme" title="Theme: ${settings.theme}" aria-label="Toggle theme">${themeIcon()}</button>
       ${auth.user ? `<button class="icon-btn avatar" data-act="account" title="Signed in as ${esc(auth.user.username)}" aria-label="Account: ${esc(auth.user.username)}">${esc([...auth.user.username][0].toUpperCase())}</button>` : ''}
     </div>

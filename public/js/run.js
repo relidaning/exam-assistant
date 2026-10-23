@@ -9,6 +9,7 @@ import { loadCourse, recordAttempt, setFlags, recordExam, sessions, syncSessions
 import { MODULES, scoreExam, pointsFor, inMistakes } from './session.js';
 import { navigate } from './nav.js';
 import { openReparse } from './reparse.js';
+import { openReport } from './report.js';
 
 let timerHandle = null;
 let keyHandler = null;
@@ -178,6 +179,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     const last = i === ids.length - 1;
     btn.disabled = false;
     delete btn.dataset.skip;
+    btn.removeAttribute('title');
     // touch screens have no Enter key: a floating button shows the answer instead (CSS shows it on touch only)
     $('.reveal-fab', root).hidden = mode !== 'practice' || st.submitted;
     // Verify: this question in Google AI Mode, hidden while a mock exam is being answered
@@ -187,7 +189,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     if (mode === 'practice') {
       // the single action button: Submit once something is entered, Skip while the answer is empty
       if (!st.submitted && !isBlank(question, st.response)) { btn.textContent = 'Submit'; btn.dataset.do = 'submit'; }
-      else if (!st.submitted) { btn.textContent = last ? 'Skip & finish' : 'Skip ›'; btn.dataset.do = last ? 'finish' : 'next'; btn.dataset.skip = '1'; }
+      else if (!st.submitted) { btn.textContent = last ? 'Skip & finish' : 'Skip ›'; btn.dataset.do = last ? 'finish' : 'next'; btn.dataset.skip = '1'; btn.title = 'A skipped question goes to Mistakes'; }
       else if (last) { btn.textContent = 'Finish'; btn.dataset.do = 'finish'; }
       else { btn.textContent = 'Next ›'; btn.dataset.do = 'next'; }
       if (ungraded()) { btn.dataset.blocked = '1'; btn.textContent = 'Grade it to continue'; } else delete btn.dataset.blocked;
@@ -213,7 +215,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
       if (!r) return isBlank(question, st.response) ? 'skipped' : 'answered';
       return r.correct ? 'right' : r.score > 0 ? 'partial' : 'wrong';
     }
-    return isBlank(question, st.response) ? '' : 'answered';
+    return isBlank(question, st.response) ? (st.skipped ? 'skipped' : '') : 'answered';
   }
 
   function drawNav() {
@@ -283,6 +285,18 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     }
   }
 
+  /** Skip in practice: the question counts as wrong (once a round), so it goes to Mistakes; it can still be answered later. */
+  function skip(question) {
+    const st = entry(s, question.id);
+    if (st.submitted || st.skipped) return;
+    st.skipped = true;
+    save();
+    toast('Skipped — added to Mistakes', 'info', 1800);
+    recordAttempt(courseId, { qid: question.id, correct: false, score: 0, response: null, mode: s.module })
+      .then(() => drawNav())
+      .catch((e) => toast(`Not saved: ${e.message}`, 'error'));
+  }
+
   function selfGrade(question, st, v, mode) {
     const first = !st.selfGrade;
     st.selfGrade = v;
@@ -341,11 +355,11 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     s.summary.durationSec = Math.round((s.finishedAt - s.startedAt) / 1000);
     save();
     try {
-      // blank answers are not counted as attempts: running out of time is not the same as getting it wrong
+      // a question left blank counts as wrong, so it goes to the mistakes book like any other miss
       for (const id of s.qids) {
         const st = s.entries[id];
-        if (st.blank || !st.result) continue;
-        await recordAttempt(courseId, { qid: id, correct: !!st.result.correct, score: st.result.score, response: st.response, mode: 'exam' });
+        if (!st.result) continue;
+        await recordAttempt(courseId, { qid: id, correct: !st.blank && !!st.result.correct, score: st.blank ? 0 : st.result.score, response: st.blank ? null : st.response, mode: 'exam' });
       }
       // the sitting goes along, so it can be reviewed from the paper list later
       const detail = { title: s.title, qids: s.qids, entries: s.entries, points: s.points, timeLimitSec: s.timeLimitSec, startedAt: s.startedAt, finishedAt: s.finishedAt, summary: s.summary };
@@ -356,6 +370,13 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
 
   function finish() {
     if (blockedByGrading()) return;
+    // questions left without an answer count as skipped: they go to Mistakes too
+    for (const id of s.qids) {
+      const st = entry(s, id);
+      if (!data.byId.has(id) || st.submitted || st.skipped) continue;
+      st.skipped = true;
+      recordAttempt(courseId, { qid: id, correct: false, score: 0, response: null, mode: s.module }).catch((e) => toast(`Not saved: ${e.message}`, 'error'));
+    }
     s.phase = 'done';
     s.finishedAt = Date.now();
     pauseClock();
@@ -368,13 +389,18 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     navigate(page('result'));
   }
 
-  /** Star and re-parse, under the question card (re-parse is hidden during a mock exam, no peeking at the source, and for courses you don't own). */
+  /**
+   * Star, re-parse and report, under the question card. Re-parse is hidden during a mock exam (no peeking at the source)
+   * and for courses you don't own; report is there whenever someone else owns the question (your fork's original), in
+   * mock exams too.
+   */
   function questionTools(p, mode) {
     const bar = document.createElement('div');
     bar.className = 'q-tools';
     // on touch screens the bar floats at the bottom left as icon-only buttons (the labels stay for screen readers)
     bar.innerHTML = `<button type="button" class="btn ghost ${p?.starred ? 'on' : ''}" data-act="star" aria-pressed="${!!p?.starred}" aria-label="${p?.starred ? 'Starred' : 'Star'}"><span class="qt-icon" aria-hidden="true">${p?.starred ? '★' : '☆'}</span><span class="qt-label">${p?.starred ? 'Starred' : 'Star'}</span><kbd class="key-hint">S</kbd></button>
-      ${mode === 'exam' || !data.course.access?.canEdit ? '' : `<button type="button" class="btn ghost" data-act="reparse" aria-label="Re-parse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg><span class="qt-label">Re-parse</span><kbd class="key-hint">P</kbd></button>`}`;
+      ${mode === 'exam' || !data.course.access?.canEdit ? '' : `<button type="button" class="btn ghost" data-act="reparse" aria-label="Re-parse" title="Fix how this question was read from its source"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/><path d="M15 20h5"/></svg><span class="qt-label">Re-parse</span><kbd class="key-hint">P</kbd></button>`}
+      ${!data.course.reportTo ? '' : `<button type="button" class="btn ghost" data-act="report" aria-label="Report a problem" title="Tell ${esc(data.course.reportTo.owner?.username || 'the owner')} what is wrong with this question"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4"/><path d="M5 4.5h11l-2 4 2 4H5"/></svg><span class="qt-label">Report</span><kbd class="key-hint">R</kbd></button>`}`;
     return bar;
   }
 
@@ -422,10 +448,11 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     else if (act === 'reparse') {
       const res = await openReparse(courseId, q().id);
       if (!res) return;
-      sessions.replaceQuestion(courseId, res.oldId, res.question.id);
+      await sessions.reload(courseId);
       await loadCourse(courseId, { force: true });
       renderRun(root, courseId, slot);
     }
+    else if (act === 'report') openReport(courseId, q());
     else if (act === 'nav-close') nav.classList.remove('open');
     else if (act === 'reveal') submit({ reveal: true });
     else if (act === 'star') {
@@ -438,6 +465,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
       drawNav();
     } else if (act === 'main') {
       const what = t.dataset.do;
+      if (t.dataset.skip) skip(q());
       if (what === 'submit') submit();
       else if (what === 'next') go(1);
       else if (what === 'finish') finish();
@@ -474,6 +502,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     if (k === 's' || k === 'S') { $('[data-act="star"]', main).click(); return; }
     if ((k === 'g' || k === 'G') && !$('.verify', root).hidden) { $('.verify', root).click(); return; }
     if (k === 'm' || k === 'M') { nav.classList.toggle('open'); showCurrentCell(); return; }
+    if (k === 'r' || k === 'R') { $('[data-act="report"]', main)?.click(); return; }
     if (k === 'Escape') { nav.classList.remove('open'); return; }
     const up = k.toUpperCase();
     const question = q();
@@ -528,10 +557,11 @@ export async function renderResult(root, courseId, slot) {
   const ids = s.qids.filter((id) => data.byId.has(id));
   const wrongIds = missedIds(s, data);
   const attempted = ids.filter((id) => s.entries[id]?.result && !s.entries[id].blank).length;
+  const blanks = isExam ? ids.filter((id) => s.entries[id]?.blank).length : ids.length - attempted;
   const acc = pct(sum.correct, attempted || 1);
   const headline = isExam
-    ? `<div class="score-big"><b>${sum.score}</b><span>/ ${sum.maxScore}</span></div><p class="muted">${pct(sum.score, sum.maxScore)}% · ${sum.correct}/${sum.total} fully correct · ${fmtDuration(sum.durationSec)}</p>`
-    : `<div class="score-big"><b>${acc}%</b></div><p class="muted">${sum.correct} of ${attempted} answered correctly${attempted < ids.length ? ` (${ids.length - attempted} skipped)` : ''} · ${fmtDuration(sum.durationSec)}</p>`;
+    ? `<div class="score-big"><b>${sum.score}</b><span>/ ${sum.maxScore}</span></div><p class="muted">${pct(sum.score, sum.maxScore)}% · ${sum.correct}/${sum.total} fully correct · ${fmtDuration(sum.durationSec)}</p>${blanks ? `<p class="hint">${blanks} left blank — added to Mistakes, to answer later.</p>` : ''}`
+    : `<div class="score-big"><b>${acc}%</b></div><p class="muted">${sum.correct} of ${attempted} answered correctly${blanks ? ` (${blanks} skipped)` : ''} · ${fmtDuration(sum.durationSec)}</p>${blanks ? `<p class="hint">Skipped questions are added to Mistakes.</p>` : ''}`;
   const rows = Object.entries(sum.byType).map(([t, v]) => `<tr><td>${esc(TYPE_LABELS[t])}</td><td>${v.correct}/${v.total}</td>${isExam ? `<td>${v.score}/${v.maxScore}</td>` : ''}<td><div class="bar"><span style="width:${pct(v.correct, v.total)}%"></span></div></td></tr>`).join('');
   root.innerHTML = `
     ${topbar(`<a href="#/c/${encodeURIComponent(courseId)}">${esc(data.course.name)}</a> › Results`)}

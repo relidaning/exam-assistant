@@ -193,15 +193,14 @@ export const sessions = {
       .filter((s) => s && s.phase !== 'done')
       .map((s) => ({ ...s, answered: answeredCount(s) }));
   },
-  /** A question was re-parsed (and may have a new id): point every session at it and drop the old answer state. */
-  replaceQuestion(courseId, oldId, newId) {
-    const swap = (ids) => ids?.map((x) => (x === oldId ? newId : x));
-    for (const s of Object.values(live.get(courseId) || {})) {
-      s.qids = swap(s.qids);
-      if (s.gradingQids) s.gradingQids = swap(s.gradingQids);
-      delete s.entries[oldId];
-      delete s.entries[newId];
-      sessions.save(s);
-    }
+  /**
+   * A question was re-parsed (it may have a new id and a new answer key): the server has already moved every round to
+   * it and graded their answers again, so take its copies instead of saving this browser's older ones over them.
+   */
+  async reload(courseId) {
+    for (const [k, p] of [...pending]) if (p.courseId === courseId) { clearTimeout(p.timer); pending.delete(k); }
+    await queues.get(courseId);
+    for (const slot of SLOTS) storage.del(key(courseId, slot));
+    adoptSessions(courseId, await api('GET', sessionUrl(courseId)));
   },
 };

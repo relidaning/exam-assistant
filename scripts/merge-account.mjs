@@ -8,5 +8,5 @@ const [from, into] = [findUser(arg('from')), findUser(arg('into'))];
 if (!from || !into) { console.error('Usage: merge-account.mjs --from <username> --into <username> (both must exist)'); process.exit(1); }
 try {
   const moved = mergeAccount(from.id, into.id);
-  console.log(`Merged “${from.username}” into “${into.username}”: ${moved.identities} sign-in method(s), ${moved.courses} course(s) moved; “${from.username}” deleted.`);
+  console.log(`Merged “${from.username}” into “${into.username}”: ${moved.identities} sign-in method(s), ${moved.courses} course(s), ${moved.reports} report(s) moved; “${from.username}” deleted.`);
 } catch (e) { console.error(e.message); process.exit(1); }

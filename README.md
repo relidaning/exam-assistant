@@ -4,7 +4,7 @@
 
 Exam Assistant is a small web app you run on your own machine. You load each course's questions (from pasted text,
 Markdown notes or past papers that Claude finds for you) and practise them. Every question type gets an answer
-screen that fits it, and wrong answers go into a mistakes book until you've got them right three times in a row. A
+screen that fits it, and wrong answers go into a mistakes book until you've got them right five times in a row. A
 mock exam is timed and sets the paper the way the real one is set.
 
 <p align="center">
@@ -28,7 +28,7 @@ network. Open that on your phone (same Wi-Fi), and add it to your home screen to
 
 ## Using it
 
-Four tabs: along the bottom on a phone, down the left side on a laptop or desktop.
+Four tabs: along the bottom on a phone, down the left side on a laptop or desktop. Signed in, the app opens on **My courses**.
 
 ### Public: find a course
 
@@ -49,7 +49,7 @@ Your own courses and your forks. Open one and pick a module:
 |---|---|
 | **Practice** | Questions in random order, with the answer and explanation right after each one |
 | **Mock exam** | Timed, with no feedback until you hand in. With past papers loaded, you choose a real paper and sit it exactly as it was set; otherwise the exam draws questions by your settings. A paper you've sat has a Review button in the paper list (and in Statistics) that reopens that sitting with your answers |
-| **Mistakes** | Everything you got wrong. A question leaves after 3 right answers in a row, or when you remove it |
+| **Mistakes** | Everything you got wrong. A question leaves after 5 right answers in a row, or when you remove it |
 | **Starred** | Questions you've saved with ☆ |
 | **Statistics** | How much you've practised, your accuracy by type and chapter, your daily activity, your mock exam scores and your most-missed questions |
 
@@ -96,6 +96,14 @@ Also everywhere:
 - **Verify** (or G) asks Google AI Mode about the question, so you can double-check an answer. It's hidden during mock exams.
 - **Re-parse** (or P) shows a question's original source text when it was read wrongly from your notes. Fix the text,
   check the preview and save; your progress on the question is kept.
+- **Report** (or R) a mistake in a question from a course you forked: the original's owner gets it under Messages (the
+  bell at the top), can fix the question from there and answers you. Once it's fixed, you can pull the new version
+  into your copy with one tap.
+- **Owners and messages**: a public course's page shows who made it (since when, their other public courses) with a
+  **Message** button. Conversations live under Messages, and the bell shows new ones.
+- **History**: each course's settings page lists its latest changes, and *See all changes* opens the full history:
+  imports, question edits (tap one to see before and after), course details, publishing, study settings and answered
+  reports, with who made each change and when.
 - **Keyboard and touch**: ←/→ to move, Enter to submit (on a phone, Enter starts a new line in written answers), S to star, M for the question list; swipe between questions
   on a touch screen.
 

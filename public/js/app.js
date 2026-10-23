@@ -1,11 +1,14 @@
 // Router + pages. Flow: course cards → course hub (module panels) → run → result; Settings decide what modules ask.
-import { $, $$, esc, api, auth, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, themeIcon } from './ui.js';
+import { $, $$, esc, api, auth, toast, dialog, confirmDialog, pct, relTime, daysUntil, fmtDuration, settings, applySettings, topbar, tabbar, themeIcon, refreshInbox } from './ui.js';
 import { md, mdInline } from './render.js';
 import { TYPES, TYPE_LABELS, answerText, isOpen } from './grade.js';
 import { loadCourse, peekCourse, invalidate, sessions, flushAllSessions, flushSessions, examDetail } from './data.js';
 import { MODULES, pickQuestions, inMistakes, accuracy, moduleConfig, examConfigured, examSummary, pointsFor, PAST_PAPER_TAG } from './session.js';
 import { renderRun, renderResult, newSession, teardownRun } from './run.js';
 import { navigate, startNav } from './nav.js';
+import { questionCard } from './answer.js';
+import { openReparse } from './reparse.js';
+import { KIND_LABELS, STATUS_LABELS } from './report.js';
 
 const app = $('#app');
 const enc = encodeURIComponent;
@@ -38,19 +41,24 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- router ----------
-// tabs: Public (/), In progress, My courses, Settings; a course's own settings live under the Settings tab
+// tabs: My courses (/), In progress, Public, Settings; a course's own settings live under the Settings tab
 const toCourseSettings = (id) => navigate(`#/settings/c/${enc(id)}${/#(exam|course|import)$/.exec(location.hash)?.[0] || ''}`);
 const routes = [
   [/^\/login$/, loginPage],
   [/^\/account$/, (params) => navigate(`#/settings${String(params) ? `?${params}` : ''}`)], // old links (and the OAuth "linked" return)
-  [/^\/?$/, publicPage],
+  [/^\/?$/, myCoursesPage],
   [/^\/progress$/, progressPage],
-  [/^\/courses$/, myCoursesPage],
+  [/^\/public$/, publicPage],
+  [/^\/courses$/, () => navigate('#/')], // old links
   [/^\/settings$/, settingsTab],
   [/^\/import$/, importPage],
+  [/^\/messages$/, messagesPage],
+  [/^\/messages\/(\d+)$/, messagePage],
+  [/^\/messages\/u\/([^/]+)$/, dmPage],
   [/^\/c\/([^/]+)$/, coursePage],
   [/^\/p\/([^/]+)$/, publicCoursePage],
   [/^\/settings\/c\/([^/#]+)(?:#\w+)?$/, settingsPage],
+  [/^\/settings\/c\/([^/#]+)\/history$/, historyPage],
   [/^\/c\/([^/]+)\/settings(?:#\w+)?$/, toCourseSettings], // old links
   [/^\/c\/([^/]+)\/setup\/\w+$/, toCourseSettings],
   [/^\/c\/([^/]+)\/run\/(\w+)$/, (id, slot) => renderRun(app, id, slot)],
@@ -69,6 +77,7 @@ let routeSeq = 0;
 async function route() {
   routeSeq++;
   teardownRun();
+  document.body.classList.remove('in-chat');
   const hash = location.hash.replace(/^#/, '') || '/';
   const [pathPart, query = ''] = hash.split('?');
   if (auth.user === undefined) {
@@ -88,9 +97,10 @@ async function route() {
     const seq = routeSeq;
     try {
       await fn(...m.slice(1).map(decodeURIComponent), new URLSearchParams(query));
+      if (seq === routeSeq && pathPart !== '/login') refreshInbox(); // the bell's count, after the page (opening a message reads it)
     } catch (e) {
       console.error(e);
-      if (seq === routeSeq) app.innerHTML = `${topbar()}<div class="page narrow"><div class="card empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a class="btn" href="#/courses">Back to courses</a></div></div>`;
+      if (seq === routeSeq) app.innerHTML = `${topbar()}<div class="page narrow"><div class="card empty"><h2>Something went wrong</h2><p>${esc(e.message)}</p><a class="btn" href="#/">Back to courses</a></div></div>`;
     }
     return;
   }
@@ -165,7 +175,7 @@ async function loginPage(params) {
         auth.firstUser = false;
         invalidate();
         coursesCache = null;
-        navigate(`#${next === '/login' ? '/' : next}`); // the Public tab, unless you were on your way somewhere
+        navigate(`#${next === '/login' ? '/' : next}`); // My courses, unless you were on your way somewhere
       } catch (err) { $('.login-error', app).textContent = err.message; }
     });
   };
@@ -193,7 +203,7 @@ async function settingsTab(params) {
         <p class="muted small">Per course: chapters, question types and counts, the mock exam's questions and duration. Also the course's details and imports.</p>
         ${mine.length ? `<ul class="row-list">${mine.map((c) => `<li><a class="row-link" href="#/settings/c/${enc(c.id)}">${monogram(c.name, '', c.id)}
             <span class="grow"><b>${esc(c.name)}</b><small class="muted">${c.stats.total} questions${c.examDate && daysUntil(c.examDate) >= 0 ? ` · exam ${esc(c.examDate)}` : ''}</small></span>${icon('chevron', 'row-chev')}</a></li>`).join('')}</ul>`
-          : '<p class="muted">No courses of your own yet. Fork a public course, or create one under <a href="#/courses">My courses</a>.</p>'}
+          : '<p class="muted">No courses of your own yet. Fork a public course, or create one under <a href="#/">My courses</a>.</p>'}
       </section>
       <section class="card" id="account">
         <h3>Account</h3>
@@ -403,7 +413,7 @@ async function progressPage() {
           </a>
           <button class="icon-btn round-del" data-act="delete-round" aria-label="Delete this round" title="Delete">${icon('trash')}</button>
         </li>`;
-      }).join('')}</ul>` : `<div class="card empty"><h2>Nothing in progress</h2><p>Start a practice round or a mock exam from one of your courses; until you finish it, it waits here.</p><a class="btn primary" href="#/courses">My courses</a></div>`}
+      }).join('')}</ul>` : `<div class="card empty"><h2>Nothing in progress</h2><p>Start a practice round or a mock exam from one of your courses; until you finish it, it waits here.</p><a class="btn primary" href="#/">My courses</a></div>`}
     </div>`;
   $$('[data-act="delete-round"]', app).forEach((b) => b.addEventListener('click', async () => {
     const li = b.closest('.round');
@@ -416,23 +426,306 @@ async function progressPage() {
   }));
 }
 
+// ---------- Messages: reports of mistakes in questions, on your courses and the ones you sent ----------
+const statusPill = (st) => `<span class="pill status-${esc(st)}">${esc(STATUS_LABELS[st] || st)}</span>`;
+const plainStem = (s) => String(s || '').replace(/!\[[^\]]*\]\([^)]*\)|!\[\[[^\]]*\]\]/g, '🖼').replace(/\{\{([^}]*)\}\}/g, '___').replace(/\s+/g, ' ').trim();
+
+async function messagesPage() {
+  const seq = routeSeq;
+  const [{ received, sent }, convs] = await Promise.all([api('GET', '/api/reports'), api('GET', '/api/messages')]);
+  if (seq !== routeSeq) return;
+  const row = (r, who) => `<li><a class="row-link msg-row report-row ${r.unread ? 'unread' : ''}" href="#/messages/${r.id}">
+      <span class="msg-dot" aria-hidden="true"></span>
+      <span class="grow"><b>${esc(plainStem(r.stem) || '(no text)')}</b>
+        <small class="muted">${r.unread ? '<span class="sr-only">New. </span>' : ''}<span class="badge">${esc(KIND_LABELS[r.kind] || r.kind)}</span> ${who} · ${esc(r.course.name)} · ${relTime(r.repliedAt && who.startsWith('to') ? r.repliedAt : r.createdAt)}</small></span>
+      ${statusPill(r.status)}</a></li>`;
+  const open = received.filter((r) => r.status === 'open').length;
+  app.innerHTML = `${topbar('Messages')}
+    <div class="page narrow">
+      <div class="page-head"><h1>Messages</h1></div>
+      <p class="muted small lead">Messages from other people, reports of mistakes in your questions, and the answers to your own reports.</p>
+      <section class="card">
+        <h3>Conversations</h3>
+        ${convs.length ? `<ul class="row-list">${convs.map((c) => `<li><a class="row-link msg-row ${c.unread ? 'unread' : ''}" href="#/messages/u/${enc(c.with)}">
+            <span class="msg-dot" aria-hidden="true"></span>
+            <span class="avatar-sm" aria-hidden="true">${esc([...c.with][0].toUpperCase())}</span>
+            <span class="grow"><b>${esc(c.with)}</b><small class="muted">${c.unread ? `<span class="sr-only">${c.unread} new. </span>` : ''}${c.last.mine ? 'You: ' : ''}${esc(c.last.body.replace(/\s+/g, ' '))}</small></span>
+            <small class="muted msg-time">${relTime(c.last.at)}</small></a></li>`).join('')}</ul>`
+          : '<p class="muted">No messages yet. To write to a course\'s owner, open the course under Public and tap Message.</p>'}
+      </section>
+      <section class="card">
+        <h3>Reports on your courses${open ? ` <span class="count-chip">${open} open</span>` : ''}</h3>
+        ${received.length ? `<ul class="row-list">${received.map((r) => row(r, `from ${esc(r.reporter || 'someone')}`)).join('')}</ul>` : '<p class="muted">No reports yet. Learners can report a question from its Report button while they practise.</p>'}
+      </section>
+      <section class="card">
+        <h3>Your reports</h3>
+        ${sent.length ? `<ul class="row-list">${sent.map((r) => row(r, `to ${esc(r.owner || 'the owner')}`)).join('')}</ul>` : '<p class="muted">Found a mistake in a question you practise? Tap Report under it; the course owner gets it.</p>'}
+      </section>
+    </div>`;
+}
+
+async function messagePage(rid) {
+  const seq = routeSeq;
+  const r = await api('GET', `/api/reports/${rid}`);
+  if (seq !== routeSeq) return;
+  const isOwner = r.role === 'owner';
+  const owner = r.owner || 'the owner';
+  const card = (q) => {
+    const el = questionCard(q, {}, { mode: 'review', showFeedback: true, locked: true, autoSubmit: false, onChange() {}, onSubmit() {}, onSelfGrade: null, footer: null });
+    el.classList.add('msg-qcard');
+    return el;
+  };
+  app.innerHTML = `${topbar(`<a href="#/messages">Messages</a> › Report`)}
+    <div class="page narrow">
+      <section class="card msg-head">
+        <p class="msg-meta"><span class="badge type">${esc(KIND_LABELS[r.kind] || r.kind)}</span>${statusPill(r.status)}</p>
+        <h3>${isOwner ? `${esc(r.reporter || 'Someone')} reported a problem` : `Your report to ${esc(owner)}`}</h3>
+        <p class="muted small">${esc(r.course.name)} · ${new Date(r.createdAt).toLocaleString()}</p>
+        <blockquote class="msg-text">${esc(r.message)}</blockquote>
+      </section>
+      <section class="msg-question">
+        <h3 class="msg-sub">${r.question ? (r.changed ? 'The question now' : 'The question') : 'The question'}</h3>
+        <div class="msg-current"></div>
+        ${r.question && r.changed ? '<details class="msg-was"><summary>As it was when reported</summary><div class="msg-reported"></div></details>' : ''}
+        ${isOwner && r.question ? `<div class="actions-row"><button class="btn" data-act="edit">${icon('practice')} Edit question</button></div>` : ''}
+      </section>
+      ${isOwner ? `<form class="card msg-reply">
+          <h3>Your answer to ${esc(r.reporter || 'them')}</h3>
+          <div class="segmented status-pick" role="radiogroup" aria-label="Status">${[['fixed', 'Fixed'], ['declined', 'No change needed'], ['open', 'Still open']].map(([v, l]) => `<label><input type="radio" name="status" value="${v}" ${(r.status === 'open' ? (r.changed ? 'fixed' : '') : r.status) === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+          <label class="field"><span>Reply</span><textarea name="reply" rows="3" maxlength="4000" placeholder="${r.changed ? 'e.g. Thanks, the answer is corrected.' : 'e.g. The answer is right: see chapter 3, “…”'}">${esc(r.reply || '')}</textarea></label>
+          ${r.repliedAt ? `<p class="hint">Last answered ${relTime(r.repliedAt)}.</p>` : ''}
+          <div class="actions-row"><button class="btn primary" type="submit">${r.repliedAt ? 'Update answer' : 'Send answer'}</button></div>
+        </form>`
+      : `<section class="card msg-answer">
+          <h3>${esc(owner)}'s answer</h3>
+          ${r.repliedAt ? `${r.reply ? `<blockquote class="msg-text">${esc(r.reply)}</blockquote>` : ''}<p class="muted small">${r.status === 'fixed' ? 'Marked as fixed' : r.status === 'declined' ? 'No change needed' : 'Still open'} · ${relTime(r.repliedAt)}</p>`
+            : `<p class="muted">No answer yet. You'll see it here, and the bell at the top shows when it arrives.</p>`}
+          ${r.canApply ? `<div class="msg-apply"><p class="small">The question in “${esc(r.course.name)}” differs from the one in your copy, “${esc(r.fromCourse.name)}”.</p><button class="btn primary" data-act="apply">Use the new version in my copy</button><p class="hint">Your answers and stars on it are kept.</p></div>` : ''}
+          ${r.status === 'open' ? '<div class="actions-row"><button class="btn ghost danger-text" data-act="withdraw">Withdraw report</button></div>' : ''}
+        </section>`}
+    </div>`;
+  $('.msg-current', app).replaceChildren(r.question ? card(r.question) : Object.assign(document.createElement('p'), { className: 'muted', textContent: 'This question has been removed from the course. As it was when reported:' }));
+  if (!r.question && r.reported) $('.msg-current', app).append(card(r.reported));
+  if (r.question && r.changed) $('.msg-reported', app).replaceChildren(card(r.reported));
+
+  $('[data-act="edit"]', app)?.addEventListener('click', async () => {
+    const res = await openReparse(r.course.id, r.qid);
+    if (!res) return;
+    await sessions.reload(r.course.id);
+    invalidate(r.course.id);
+    if (seq !== routeSeq) return;
+    await messagePage(rid);
+    toast('Question updated. Mark it fixed and send your answer', 'ok', 3500);
+  });
+  $('.msg-reply', app)?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const form = Object.fromEntries(new FormData(e.target));
+    if (!form.status) { toast('Choose Fixed, No change needed, or Still open', 'warn'); return; }
+    try {
+      await api('PATCH', `/api/reports/${rid}`, { status: form.status, reply: form.reply });
+      toast(`Answer sent to ${r.reporter || 'the reporter'}`, 'ok');
+      navigate('#/messages');
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('[data-act="apply"]', app)?.addEventListener('click', async () => {
+    try {
+      const res = await api('POST', `/api/reports/${rid}/apply`);
+      await sessions.reload(res.courseId);
+      invalidate(res.courseId);
+      toast(`Updated in “${r.fromCourse.name}”`, 'ok');
+      if (seq === routeSeq) messagePage(rid);
+    } catch (err) { toast(err.message, 'error'); }
+  });
+  $('[data-act="withdraw"]', app)?.addEventListener('click', async () => {
+    if (!(await confirmDialog('Withdraw this report?', `${owner} won't see it any more.`, 'Withdraw', true))) return;
+    try { await api('DELETE', `/api/reports/${rid}`); toast('Report withdrawn'); navigate('#/messages'); } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
+// ---------- a conversation, laid out like a messaging app ----------
+// Phones: the chat fills the screen (its own header with Back, no tab bar) and the message box stays above the keyboard.
+// Wide screens: the conversation list on the left, the chat on the right. New messages come in by themselves.
+const SEND_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a.99.99 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z"/></svg>';
+const BACK_ICON = '<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>';
+const avatarOf = (name, cls = 'avatar-sm') => `<span class="${cls}" style="${courseColor(name)};background:var(--c);color:var(--on)" aria-hidden="true">${esc([...String(name)][0].toUpperCase())}</span>`;
+const timeOf = (iso) => new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+
+function chatDay(iso) {
+  const d = new Date(iso), today = new Date();
+  const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return d.toLocaleDateString(undefined, days < 7 ? { weekday: 'long' } : { year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric', month: 'short', day: 'numeric' });
+}
+
+/** Bubbles: a date pill when the day changes; messages from the same person a few minutes apart form one group. */
+function chatBubbles(msgs, other) {
+  let html = '';
+  msgs.forEach((m, i) => {
+    const prev = msgs[i - 1], next = msgs[i + 1];
+    const day = chatDay(m.at);
+    if (!prev || chatDay(prev.at) !== day) html += `<li class="chat-day"><span>${esc(day)}</span></li>`;
+    const joins = (a, b) => a && b && a.mine === b.mine && chatDay(a.at) === chatDay(b.at) && Math.abs(new Date(b.at) - new Date(a.at)) < 5 * 60000;
+    const first = !joins(prev, m), last = !joins(m, next);
+    const ticks = m.mine ? `<span class="tick ${m.read ? 'read' : ''}" title="${m.failed ? 'Not sent' : m.pending ? 'Sending' : m.read ? 'Read' : 'Sent'}">${m.failed ? '!' : m.pending ? '◷' : m.read ? '✓✓' : '✓'}</span>` : '';
+    html += `<li class="msg ${m.mine ? 'mine' : 'theirs'} ${first ? 'first' : ''} ${last ? 'last' : ''} ${m.failed ? 'failed' : ''}">
+      ${!m.mine ? (last ? avatarOf(other, 'avatar-xs') : '<span class="avatar-gap"></span>') : ''}
+      <div class="bubble">${m.course ? `<a class="bubble-course" href="#/p/${enc(m.course.id)}">About “${esc(m.course.name || m.course.id)}”</a>` : ''}<span class="bubble-text">${esc(m.body)}</span><span class="bubble-meta"><time datetime="${esc(m.at)}">${timeOf(m.at)}</time>${ticks}</span></div>
+    </li>`;
+  });
+  return html;
+}
+
+const convRow = (c, current) => `<li><a class="conv ${c.with === current ? 'current' : ''} ${c.unread ? 'unread' : ''}" href="#/messages/u/${enc(c.with)}">
+    ${avatarOf(c.with, 'avatar-md')}
+    <span class="grow"><span class="conv-top"><b>${esc(c.with)}</b><small>${esc(relTime(c.last.at))}</small></span>
+      <span class="conv-bottom"><small>${c.last.mine ? 'You: ' : ''}${esc(c.last.body.replace(/\s+/g, ' '))}</small>${c.unread ? `<span class="conv-badge">${c.unread}</span>` : ''}</span></span></a></li>`;
+
+async function dmPage(name, params) {
+  const seq = routeSeq;
+  const courseId = params?.get?.('course') || null;
+  const [t, convs, profile, course] = await Promise.all([
+    api('GET', `/api/messages/${enc(name)}`),
+    api('GET', '/api/messages'),
+    api('GET', `/api/users/${enc(name)}`).catch(() => null),
+    courseId ? api('GET', `/api/courses/${enc(courseId)}`).then((d) => d.course).catch(() => null) : null,
+  ]);
+  if (seq !== routeSeq) return;
+  const other = t.with.username;
+  const msgs = t.messages;
+  const status = profile ? (profile.courses?.length ? `${profile.courses.length} public course${profile.courses.length === 1 ? '' : 's'}` : `Member since ${new Date(profile.memberSince).toLocaleDateString(undefined, { year: 'numeric', month: 'long' })}`) : '';
+  document.body.classList.add('in-chat');
+  app.innerHTML = `${tabbar()}
+    <div class="chat-app">
+      <aside class="chat-side" aria-label="Conversations">
+        <header class="chat-side-head"><a class="btn small ghost" href="#/messages">${BACK_ICON}<span>Messages</span></a></header>
+        <ul class="conv-list">${convs.some((c) => c.with === other) ? '' : convRow({ with: other, last: { body: 'New conversation', at: new Date().toISOString() }, unread: 0 }, other)}${convs.map((c) => convRow(c, other)).join('')}</ul>
+      </aside>
+      <section class="chat" aria-label="Conversation with ${esc(other)}">
+        <header class="chat-bar">
+          <a class="icon-btn chat-back" href="#/messages" aria-label="Back to Messages">${BACK_ICON}</a>
+          ${avatarOf(other, 'avatar-md')}
+          <span class="grow"><b>${esc(other)}</b><small class="muted">${esc(status)}</small></span>
+        </header>
+        <div class="chat-scroll"><ul class="chat-list" aria-live="polite"></ul></div>
+        ${t.canMessage ? `<form class="chat-compose">
+            ${course ? `<div class="chat-about"><span>About <b>${esc(course.name)}</b></span><button type="button" class="icon-btn" data-act="no-course" aria-label="Don't attach the course">✕</button></div>` : ''}
+            <div class="chat-row"><textarea name="body" rows="1" maxlength="4000" placeholder="Message" aria-label="Message to ${esc(other)}" enterkeyhint="send"></textarea>
+            <button class="send-btn" type="submit" aria-label="Send" disabled>${SEND_ICON}</button></div>
+          </form>` : `<p class="chat-closed muted small">You can write to ${esc(other)} once they have a course you can see.</p>`}
+      </section>
+    </div>`;
+  const chatApp = $('.chat-app', app);
+  const scroller = $('.chat-scroll', app);
+  const list = $('.chat-list', app);
+  const nearBottom = () => scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+  const draw = (stick = true) => {
+    const was = nearBottom();
+    list.innerHTML = msgs.length ? chatBubbles(msgs, other) : `<li class="chat-empty">${avatarOf(other, 'avatar-big')}<b>${esc(other)}</b><span class="muted">No messages yet. Say hello${course ? `, or ask about “${esc(course.name)}”` : ''}.</span></li>`;
+    if (stick || was) scroller.scrollTop = scroller.scrollHeight;
+  };
+  draw();
+
+  // phones: keep the whole chat inside the part of the screen the keyboard leaves free
+  const vv = window.visualViewport;
+  const fit = () => {
+    if (!chatApp.isConnected) return;
+    chatApp.style.setProperty('--vvh', `${vv.height}px`);
+    chatApp.style.setProperty('--vvt', `${vv.offsetTop}px`);
+    if (document.activeElement?.closest?.('.chat-compose')) scroller.scrollTop = scroller.scrollHeight;
+  };
+  vv?.addEventListener('resize', fit);
+  vv?.addEventListener('scroll', fit);
+  fit();
+
+  // new messages and read marks come in while the chat is open
+  const timer = setInterval(async () => {
+    if (seq !== routeSeq || !chatApp.isConnected) { clearInterval(timer); vv?.removeEventListener('resize', fit); vv?.removeEventListener('scroll', fit); document.body.classList.remove('in-chat'); return; }
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const fresh = await api('GET', `/api/messages/${enc(other)}`);
+      if (seq !== routeSeq) return;
+      const pending = msgs.filter((m) => m.pending || m.failed);
+      const sig = (a) => a.map((m) => `${m.id}:${m.read}`).join();
+      if (sig(fresh.messages) !== sig(msgs.filter((m) => !m.pending && !m.failed))) {
+        const gotNew = fresh.messages.length > msgs.length - pending.length;
+        msgs.splice(0, msgs.length, ...fresh.messages, ...pending);
+        draw(false);
+        if (gotNew) refreshInbox();
+      }
+      const side = await api('GET', '/api/messages');
+      if (seq === routeSeq && $('.conv-list', app)) $('.conv-list', app).innerHTML = side.map((c) => convRow(c, other)).join('') || convRow({ with: other, last: { body: 'New conversation', at: new Date().toISOString() }, unread: 0 }, other);
+    } catch { /* offline for a moment: try again on the next tick */ }
+  }, 4000);
+
+  let about = course?.id || null;
+  $('[data-act="no-course"]', app)?.addEventListener('click', (e) => { about = null; e.target.closest('.chat-about').remove(); });
+  const form = $('.chat-compose', app);
+  if (!form) return;
+  const ta = $('textarea', form), send = $('.send-btn', form);
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(ta.scrollHeight, 140)}px`; send.disabled = !ta.value.trim(); };
+  ta.addEventListener('input', grow);
+  if (matchMedia('(pointer: fine)').matches) ta.focus();
+  // Enter sends on a keyboard (Shift+Enter: new line); on a phone Enter is a new line and the button sends
+  ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && matchMedia('(pointer: fine)').matches) { e.preventDefault(); form.requestSubmit(); } });
+  const deliver = async (m) => {
+    try {
+      const saved = await api('POST', `/api/messages/${enc(other)}`, { body: m.body, courseId: m.courseId });
+      Object.assign(m, saved, { pending: false, failed: false });
+    } catch (err) {
+      Object.assign(m, { pending: false, failed: true });
+      toast(`Not sent: ${err.message}. Tap the message to try again`, 'error', 4000);
+    }
+    if (seq === routeSeq) draw(false);
+  };
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const body = ta.value.trim();
+    if (!body) return;
+    // shown at once, ticked when the server has it
+    const m = { id: `tmp-${Date.now()}`, mine: true, body, at: new Date().toISOString(), read: false, pending: true, courseId: about,
+      ...(about && course ? { course: { id: course.id, name: course.name } } : {}) };
+    msgs.push(m);
+    ta.value = '';
+    grow();
+    about = null; // only the first message carries the course
+    $('.chat-about', app)?.remove();
+    draw();
+    ta.focus();
+    deliver(m);
+  });
+  list.addEventListener('click', (e) => {
+    const li = e.target.closest('.msg.failed');
+    if (!li) return;
+    const m = msgs.filter((x) => x.mine)[[...list.querySelectorAll('.msg.mine')].indexOf(li)];
+    if (m?.failed) { m.failed = false; m.pending = true; draw(false); deliver(m); }
+  });
+}
+
 // ---------- My courses tab: the ones you own (your own and your forks) ----------
 function myCoursesPage() {
   return withCourses(drawMine);
 }
 
+const PIN = '<svg class="ico-s" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 4h6l-1 6 3 3v2H7v-2l3-3-1-6zM12 15v6"/></svg>';
+
 function drawMine(courses) {
+  // pinned courses in a row of their own (the latest pin first), the rest below in the server's order
   const mine = courses.filter((c) => c.mine);
+  mine.sort((x, y) => (y.pinnedAt || '').localeCompare(x.pinnedAt || ''));
+  const pinBtn = (c) => `<button type="button" class="ct-pin ${c.pinnedAt ? 'on' : ''}" data-pin="${esc(c.id)}" aria-pressed="${!!c.pinnedAt}"
+    title="${c.pinnedAt ? 'Unpin' : 'Pin to the top'}" aria-label="${c.pinnedAt ? 'Unpin' : 'Pin'} ${esc(c.name)}">${PIN}</button>`;
   app.innerHTML = `${topbar()}
     <div class="page">
       <div class="page-head">
         <h1>My courses</h1>
         <div class="actions-row"><a class="btn ghost" href="#/import">Import questions</a><button class="btn primary" data-act="new">+ New course</button></div>
       </div>
-      ${mine.length ? `<div class="course-tiles">${mine.map((c) => courseTile(c)).join('')}</div>` : `
+      ${mine.length ? [mine.filter((c) => c.pinnedAt), mine.filter((c) => !c.pinnedAt)].filter((g) => g.length)
+    .map((g) => `<div class="course-tiles">${g.map((c) => `<div class="ct-wrap">${courseTile(c)}${pinBtn(c)}</div>`).join('')}</div>`).join('') : `
       <div class="card empty">
         <h2>No courses yet</h2>
-        <p>Fork one from <a href="#/">Public</a> to practise it, or make your own: paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
+        <p>Fork one from <a href="#/public">Public</a> to practise it, or make your own: paste a paper, upload Markdown/JSON, or ask Claude in the terminal:</p>
         <ul class="tips">
           <li>“Find past exam papers for <i>Linear Algebra</i> and load them”</li>
           <li>“Load the questions from my vault notes in <i>Courses/Physics</i>”</li>
@@ -442,6 +735,15 @@ function drawMine(courses) {
       </div>`}
     </div>`;
   $$('[data-act="new"]', app).forEach((b) => b.addEventListener('click', newCourseDialog));
+  $$('[data-pin]', app).forEach((b) => b.addEventListener('click', async () => {
+    const c = courses.find((x) => x.id === b.dataset.pin);
+    try {
+      const { pinnedAt } = await api('PUT', `/api/courses/${enc(c.id)}/pin`, { pinned: !c.pinnedAt });
+      coursesCache = courses.map((x) => (x.id === c.id ? { ...x, pinnedAt } : x));
+      drawMine(coursesCache);
+      toast(pinnedAt ? `Pinned “${c.name}”` : `Unpinned “${c.name}”`, 'ok');
+    } catch (err) { toast(err.message, 'error'); }
+  }));
 }
 
 async function newCourseDialog() {
@@ -522,7 +824,7 @@ function drawCourse(id, data) {
       : { key: 'exam', title: 'Mock exam', info: 'Tap to set up', href: `#/settings/c/${enc(id)}#exam`, unset: true },
     { key: 'mistakes', title: 'Mistakes', info: mistakes ? `${mistakes} to review` : 'All clear', n: mistakes },
     { key: 'starred', title: 'Starred', info: starred ? `${starred} saved` : 'None yet', n: starred, on: '#2b1a00' },
-    { key: 'stats', title: 'Statistics', info: 'Progress, accuracy, exam history', href: `${base}/stats`, color: '#1baf7a' },
+    { key: 'stats', title: 'Statistics', info: 'Progress & accuracy', href: `${base}/stats`, color: '#1baf7a' },
   ];
   const tile = (t) => {
     // a module with an unfinished session says so; tapping it offers Resume / Start new
@@ -555,8 +857,7 @@ function drawCourse(id, data) {
         <div class="actions-row"><button class="btn ghost small" data-act="discard">Discard</button><a class="btn primary small" href="${base}/run/drill">Resume</a></div>
       </div>` : ''}
       ${!stats.total ? `<div class="card empty"><h2>No questions yet</h2><p>Import a paper, notes, or a JSON bank to get started.</p><a class="btn primary" href="#/settings/c/${enc(id)}#import">Import questions</a></div>` : ''}
-      <div class="mtiles">${tiles.slice(0, 4).map(tile).join('')}</div>
-      <div class="mtiles tools-row">${tiles.slice(4).map(tile).join('')}</div>
+      <div class="mtiles">${tiles.map(tile).join('')}</div>
     </div>`;
   $('[data-act="discard"]', app)?.addEventListener('click', async () => {
     if (await confirmDialog('Discard unfinished session?', 'Answers already submitted stay in your history.', 'Discard', true)) { sessions.clear(id, 'drill'); coursePage(id); }
@@ -614,6 +915,7 @@ function drawCourseInfo(id, data) {
       </section>`}
       ${about ? `<section class="card about"><h3>About this course</h3><div class="prose">${md(about)}</div></section>`
         : own ? `<section class="card about"><h3>About this course</h3><p class="muted small">No description yet. <a href="#/settings/c/${enc(id)}#course">Add one</a>: its first line is the summary on the course card, the lines after it show here.</p></section>` : ''}
+      ${course.owner ? `<section class="card owner-card" data-owner="${esc(course.owner.username)}"><h3>Made by</h3>${ownerCard({ username: course.owner.username })}</section>` : ''}
       <section class="card">
         <h3>What's inside</h3>
         ${stats.total ? `<div class="info-mix">${typeMix(stats.byType, stats.total)}</div>` : '<p class="muted">No questions yet.</p>'}
@@ -630,11 +932,28 @@ function drawCourseInfo(id, data) {
   $$('[data-open-fork]', app).forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); openUnderMyCourses(a.getAttribute('href').slice(1)); }));
   $('[data-act="visibility"]', app)?.addEventListener('click', () => toggleVisibility(data));
   $('[data-act="delete"]', app)?.addEventListener('click', () => deleteCourse(data));
+  if (course.owner) {
+    const seq = routeSeq;
+    api('GET', `/api/users/${enc(course.owner.username)}`).then((p) => {
+      const card = $('.owner-card', app);
+      if (card && seq === routeSeq) card.innerHTML = `<h3>Made by</h3>${ownerCard(p, id)}`;
+    }).catch(() => {});
+  }
+}
+
+/** A course owner in brief: who, since when, their other public courses, and a way to message them. */
+function ownerCard(p, courseId) {
+  const others = (p.courses || []).filter((c) => c.id !== courseId);
+  return `<div class="account-head owner-head"><span class="avatar-big" aria-hidden="true">${esc([...p.username][0].toUpperCase())}</span>
+      <span class="grow"><b>${esc(p.username)}${p.isYou ? ' <span class="muted">(you)</span>' : ''}</b>
+        <small class="muted">${p.memberSince ? `Member since ${esc(new Date(p.memberSince).toLocaleDateString(undefined, { year: 'numeric', month: 'long' }))}` : ''}${p.courses ? ` · ${p.courses.length} public course${p.courses.length === 1 ? '' : 's'}` : ''}</small></span>
+      ${p.canMessage ? `<a class="btn primary small" href="#/messages/u/${enc(p.username)}${courseId ? `?course=${enc(courseId)}` : ''}">Message</a>` : ''}</div>
+    ${others.length ? `<h4>Also by ${esc(p.username)}</h4><ul class="info-list">${others.map((c) => `<li><a class="grow" href="#/p/${enc(c.id)}">${esc(c.name)}</a><span class="muted">${c.questions} q</span></li>`).join('')}</ul>` : ''}`;
 }
 
 /** Open one of your courses with My courses behind it (Back goes there, not to where you came from). */
 async function openUnderMyCourses(path) {
-  await navigate('#/courses');
+  await navigate('#/');
   navigate(path);
 }
 
@@ -649,7 +968,7 @@ async function deleteCourse(data) {
   invalidate(course.id);
   coursesCache = null;
   toast('Course deleted');
-  navigate(course.access.isOwner ? '#/courses' : '#/');
+  navigate(course.access.isOwner ? '#/' : '#/public');
 }
 
 /** Where one of your courses stands: forked from a public course, published in Public, or private to you. */
@@ -679,7 +998,7 @@ async function toggleVisibility(data) {
     invalidate(course.id);
     coursesCache = null;
     toast(going === 'public' ? 'Published: everyone can find it under Public courses' : 'Course is private now', 'ok');
-    if (course.access.isOwner) route(); else navigate('#/'); // redraw the page it was changed from
+    if (course.access.isOwner) route(); else navigate('#/public'); // redraw the page it was changed from
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -928,8 +1247,9 @@ async function settingsPage(id) {
           <a class="btn ghost" href="/api/courses/${enc(id)}/export" download="${esc(id)}.json">⬇ Export JSON</a>
           <a class="btn ghost" href="#/c/${enc(id)}/print">🖨 Printable paper</a>
         </div>
-        ${course.sources?.length ? `<details><summary>Import history (${course.sources.length})</summary><ul class="sources">${course.sources.slice().reverse().map((x) => `<li>${esc(relTime(x.at))} — ${esc(x.kind)}: ${esc(x.name || '')} (${x.count})</li>`).join('')}</ul></details>` : ''}
       </section>
+      ${course.access.canManage ? `<section class="card" id="history"><h3>History</h3><div class="history-peek"><p class="muted small">Loading…</p></div>
+        <a class="btn ghost" href="#/settings/c/${enc(id)}/history">See all changes ›</a></section>` : ''}
       ${course.access.canManage ? `<section class="card danger-zone"><h3>Delete course</h3><p class="muted">Deletes the question bank and everyone's progress on it${data.learners ? ` (${data.learners} other ${data.learners === 1 ? 'person has' : 'people have'} practised it)` : ''}.</p><button class="btn danger" data-act="delete">Delete course</button></section>` : ''}
     </div>`;
 
@@ -945,6 +1265,13 @@ async function settingsPage(id) {
     } catch (err) { toast(err.message, 'error'); }
   });
   $('[data-act="delete"]', app)?.addEventListener('click', () => deleteCourse(data));
+  if (course.access.canManage) {
+    api('GET', `/api/courses/${enc(id)}/history?limit=3`).then((h) => {
+      const el = $('.history-peek', app);
+      if (!el || seq !== routeSeq) return;
+      el.innerHTML = h.entries.length ? `<ul class="history-list compact">${h.entries.map((e) => historyRow(e, false)).join('')}</ul><p class="hint">${h.total} change${h.total === 1 ? '' : 's'} in all.</p>` : '<p class="muted">No changes recorded yet.</p>';
+    }).catch(() => {});
+  }
   if (course.access.canEdit) importPanel($('#import', app), id, () => { if (seq === routeSeq) settingsPage(id); }); // only redraw if still on this page
 
   const form = $('form.settings', app);
@@ -985,7 +1312,7 @@ async function settingsPage(id) {
   form.addEventListener('input', refresh);
   form.addEventListener('change', refresh);
   refresh();
-  const anchor = /#(exam|course|import)$/.exec(location.hash);
+  const anchor = /#(exam|course|import|history)$/.exec(location.hash);
   if (anchor) ($(`#${anchor[1]}`, app) || $('#course', app)).scrollIntoView({ block: 'start' });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -995,6 +1322,127 @@ async function settingsPage(id) {
       toast('Settings saved', 'ok');
       navigate(`#/c/${enc(id)}`);
     } catch (err) { toast(err.message, 'error'); }
+  });
+}
+
+// ---------- course history: every change, newest first ----------
+const HISTORY_ICONS = {
+  created: '<path d="M12 5v14M5 12h14"/>', forked: '<circle cx="6" cy="5" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="12" cy="19" r="2"/><path d="M6 7v2a3 3 0 0 0 3 3h6a3 3 0 0 0 3-3V7M12 12v5"/>',
+  import: '<path d="M12 4v11m0 0l-4-4m4 4l4-4M5 19h14"/>', question: '<path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/>',
+  'question-deleted': '<path d="M4 7h16M10 11v6m4-6v6M6 7l1 12.5h10L18 7M9 7V4.5h6V7"/>', details: '<path d="M5 6h14M5 12h14M5 18h9"/>',
+  published: '<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17M12 3.5a13 13 0 0 1 0 17M12 3.5a13 13 0 0 0 0 17"/>',
+  unpublished: '<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
+  settings: '<path d="M4 7h9m4 0h3M4 12h3m4 0h9M4 17h11m4 0h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/>',
+  report: '<path d="M5 21V4"/><path d="M5 4.5h11l-2 4 2 4H5"/>',
+};
+const QUESTION_FIELDS = [['type', 'Type'], ['stem', 'Question'], ['options', 'Options'], ['answer', 'Answer'], ['explanation', 'Explanation'], ['keywords', 'Key points'],
+  ['chapter', 'Chapter'], ['tags', 'Tags'], ['source', 'Source'], ['difficulty', 'Difficulty'], ['media', 'Media']];
+
+function questionValue(q, key) {
+  if (q?.[key] == null || (Array.isArray(q[key]) && !q[key].length)) return '';
+  if (key === 'type') return TYPE_LABELS[q.type] || q.type;
+  if (key === 'answer') return isOpen(q.type) ? String(q.answer) : String(answerText(q));
+  if (key === 'options') return q.options.map((o, i) => `${'ABCDEFGHIJKL'[i]}. ${o}`).join('\n');
+  if (key === 'media') return q.media.map((m) => m.src || m.url || JSON.stringify(m)).join('\n');
+  return Array.isArray(q[key]) ? q[key].join(', ') : String(q[key]);
+}
+
+/** Before → after, for the fields that changed. */
+function diffRows(rows) {
+  return rows.length ? `<dl class="diff">${rows.map(([label, before, after]) => `<dt>${esc(label)}</dt>
+    <dd>${before ? `<del>${esc(before)}</del>` : ''}${after ? `<ins>${esc(after)}</ins>` : '<ins class="none">(removed)</ins>'}</dd>`).join('')}</dl>` : '';
+}
+
+/** Study settings before → after, one row per setting that changed. */
+function settingsRows(before = {}, after = {}) {
+  const types = (a) => (a?.length ? a.map((t) => TYPE_LABELS[t] || t).join(', ') : 'all types');
+  const rows = [
+    ['Chapters', (x) => (x.chapters?.length ? x.chapters.join(', ') : 'all chapters')],
+    ['Practice: question types', (x) => types(x.practice?.types)],
+    ['Practice: questions per round', (x) => (x.practice?.count ? String(x.practice.count) : 'all')],
+    ['Mistakes: question types', (x) => types(x.mistakes?.types)],
+    ['Mistakes: frequent only', (x) => (x.mistakes?.frequentOnly ? 'yes' : 'no')],
+    ['Mock exam: draws from', (x) => (x.exam?.tag ? 'past papers only' : 'whole course')],
+    ['Mock exam: duration', (x) => (x.exam?.timeMin ? `${x.exam.timeMin} min` : 'no limit')],
+  ];
+  for (const t of TYPES) {
+    rows.push([`Mock exam: ${TYPE_LABELS[t]} questions`, (x) => String(x.exam?.perType?.[t] || 0)]);
+    rows.push([`Mock exam: ${TYPE_LABELS[t]} points each`, (x) => (x.exam?.points?.[t] != null ? String(x.exam.points[t]) : 'default')]);
+  }
+  return rows.map(([label, f]) => [label, f(before || {}), f(after || {})]).filter(([, b, a]) => b !== a);
+}
+
+function historyDetail(e) {
+  const d = e.detail;
+  if (!d) return '';
+  if (e.action === 'settings') return diffRows(settingsRows(d.before, d.after));
+  if (e.action === 'question') {
+    const rows = QUESTION_FIELDS.map(([k, label]) => [label, questionValue(d.before, k), questionValue(d.after, k)]).filter(([, b, a]) => b !== a);
+    const rg = d.regraded;
+    return `${d.why ? `<p class="small muted">${esc(d.why)}</p>` : ''}${diffRows(rows)}${rg ? `<p class="small muted">Graded again: ${[rg.attempts && `${rg.attempts} answer${rg.attempts === 1 ? '' : 's'}`, rg.exams && `${rg.exams} mock exam sitting${rg.exams === 1 ? '' : 's'}`, rg.sessions && `${rg.sessions} saved round${rg.sessions === 1 ? '' : 's'}`].filter(Boolean).join(', ')}.</p>` : ''}`;
+  }
+  if (e.action === 'question-deleted') return diffRows(QUESTION_FIELDS.map(([k, label]) => [label, questionValue(d.before, k), '']).filter(([, b]) => b)).replaceAll('<ins class="none">(removed)</ins>', '');
+  if (e.action === 'details') {
+    const label = { name: 'Name', description: 'Description', examDate: 'Exam date' };
+    return diffRows(Object.entries(d.fields || {}).map(([k, v]) => [label[k] || k, v.before || '', v.after || '']));
+  }
+  if (e.action === 'report') {
+    return `<p class="small"><b>Report:</b> ${esc(d.message || '')}</p>${d.reply ? `<p class="small"><b>Answer:</b> ${esc(d.reply)}</p>` : ''}<a class="small" href="#/messages/${d.report}">Open the report</a>`;
+  }
+  if (e.action === 'import' && d.added != null) return `<p class="small muted">${d.added} added · ${d.updated} updated · ${d.unchanged} unchanged${d.removed ? ` · ${d.removed} removed` : ''} · ${d.total} in the course after it</p>`;
+  return '';
+}
+
+/** The entry's line; a question's stem is rendered (formulas, bold) rather than shown as source. */
+function historySummary(e) {
+  const q = e.action === 'question' ? e.detail?.after : e.action === 'question-deleted' ? e.detail?.before : null;
+  if (!q?.stem) return esc(e.summary);
+  return `${e.action === 'question' ? 'Edited a question' : 'Deleted a question'}: <span class="history-stem">${mdInline(String(q.stem).split('\n')[0])}</span>`;
+}
+
+function historyRow(e, expandable = true) {
+  const detail = expandable ? historyDetail(e) : '';
+  const head = `<svg class="ico history-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${HISTORY_ICONS[e.action] || HISTORY_ICONS.details}</svg>
+    <span class="grow"><span class="history-sum">${historySummary(e)}</span><small class="muted">${esc(e.by || 'import script')} · <time datetime="${esc(e.at)}" title="${esc(new Date(e.at).toLocaleString())}">${esc(relTime(e.at))}</time></small></span>`;
+  return `<li class="history-item action-${esc(e.action)}">${detail ? `<details><summary>${head}</summary><div class="history-detail">${detail}</div></details>` : `<div class="history-head">${head}</div>`}</li>`;
+}
+
+async function historyPage(id) {
+  const seq = routeSeq;
+  const data = await loadCourse(id);
+  const h = await api('GET', `/api/courses/${enc(id)}/history?limit=100`);
+  if (seq !== routeSeq) return;
+  const entries = [...h.entries];
+  const day = (iso) => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' });
+  const draw = () => {
+    const groups = [];
+    for (const e of entries) {
+      const d = day(e.at);
+      if (groups.at(-1)?.day !== d) groups.push({ day: d, items: [] });
+      groups.at(-1).items.push(e);
+    }
+    $('.history-groups', app).innerHTML = groups.map((g) => `<h3 class="history-day">${esc(g.day)}</h3><ul class="history-list">${g.items.map((e) => historyRow(e)).join('')}</ul>`).join('')
+      || '<div class="card empty"><h2>No changes yet</h2><p>Imports, question edits, course details, publishing and settings changes will be listed here.</p></div>';
+    const more = $('[data-act="more"]', app);
+    more.hidden = entries.length >= h.total;
+  };
+  app.innerHTML = `${topbar(`<a href="#/settings">Settings</a> › <a href="#/settings/c/${enc(id)}">${esc(data.course.name)}</a> › History`)}
+    <div class="page narrow">
+      <div class="page-head"><h1>History</h1></div>
+      <p class="muted small lead">Every change to “${esc(data.course.name)}”: imports, question edits (tap one to see what changed), course details, publishing and study settings. ${h.total} in all.</p>
+      <div class="history-groups"></div>
+      <div class="actions-row"><button class="btn ghost" data-act="more" hidden>Show older changes</button></div>
+    </div>`;
+  draw();
+  $('[data-act="more"]', app).addEventListener('click', async (ev) => {
+    ev.target.disabled = true;
+    try {
+      const next = await api('GET', `/api/courses/${enc(id)}/history?limit=100&offset=${entries.length}`);
+      if (seq !== routeSeq) return;
+      entries.push(...next.entries);
+      draw();
+    } catch (err) { toast(err.message, 'error'); }
+    ev.target.disabled = false;
   });
 }
 
@@ -1238,7 +1686,7 @@ function previewHtml(r, filename) {
 async function importPage(params) {
   const courses = (await api('GET', '/api/courses')).filter((c) => c.mine); // only your own courses take imports
   const pre = params?.get?.('course');
-  app.innerHTML = `${topbar(`<a href="#/courses">My courses</a> › Import`)}
+  app.innerHTML = `${topbar(`<a href="#/">My courses</a> › Import`)}
     <div class="page narrow">
       <h1>Import questions</h1>
       <section class="card">

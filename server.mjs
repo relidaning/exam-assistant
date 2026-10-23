@@ -233,7 +233,7 @@ function manage(id, user) {
 
 function courseOut(id, user) {
   const a = view(id, user);
-  return { ...store.getCourse(id), access: { isOwner: a.isOwner, canEdit: a.canEdit, canManage: a.canManage } };
+  return { ...store.getCourse(id), access: { isOwner: a.isOwner, canEdit: a.canEdit, canManage: a.canManage }, reportTo: store.reportTarget(id, user) };
 }
 
 const routes = [
@@ -259,10 +259,16 @@ const routes = [
     if (['name', 'description', 'examDate'].some((k) => patch[k] !== undefined)) edit(id, user);
     // publishing and unpublishing are the admin's: their own courses up or down, anyone's public course down
     if (patch.visibility !== undefined && !(user.isAdmin && (patch.visibility === 'public' ? a.isOwner : a.canManage))) throw store.httpError(403, 'Only an admin can publish or unpublish courses');
-    return store.updateCourse(id, patch);
+    return store.updateCourse(id, patch, { by: user.id });
   }],
   ['DELETE', /^\/api\/courses\/([^/]+)$/, (req, user, [id]) => { manage(id, user); store.deleteCourse(id); return { ok: true }; }],
   ['POST', /^\/api\/courses\/([^/]+)\/fork$/, async (req, user, [id]) => { view(id, user); return store.forkCourse(id, user, await readBody(req)); }],
+  // what was changed in the course and by whom: for whoever may change or manage it
+  ['GET', /^\/api\/courses\/([^/]+)\/history$/, (req, user, [id]) => {
+    manage(id, user);
+    const q = new URL(req.url, 'http://x').searchParams;
+    return store.courseHistory(id, { limit: Math.min(Number(q.get('limit')) || 100, 500), offset: Number(q.get('offset')) || 0 });
+  }],
   ['GET', /^\/api\/courses\/([^/]+)\/export$/, (req, user, [id]) => { view(id, user); return store.getCourse(id); }],
   ['GET', /^\/api\/courses\/([^/]+)\/activity$/, (req, user, [id]) => {
     view(id, user);
@@ -280,7 +286,7 @@ const routes = [
     const body = await readBody(req);
     const { format, parsed, warnings, defaults } = preparseImport(body, id);
     const result = store.importQuestions(id, parsed.questions, {
-      mode: body.mode, defaults, source: { kind: body.sourceKind || 'paste', name: body.filename || body.source || format },
+      mode: body.mode, defaults, source: { kind: body.sourceKind || 'paste', name: body.filename || body.source || format }, by: user.id,
     });
     return { ...result, warnings };
   }],
@@ -317,15 +323,31 @@ const routes = [
     }
     if (old.question.difficulty && !q.difficulty) q.difficulty = old.question.difficulty;
     if (!body.save) return { question: q, warnings };
-    const saved = store.replaceQuestion(id, qid, q, { raw: content, line: body.line ?? null });
+    const saved = store.replaceQuestion(id, qid, q, { raw: content, line: body.line ?? null, by: user.id });
     return { question: saved, oldId: qid, warnings };
   }],
-  ['DELETE', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)$/, (req, user, [id, qid]) => { edit(id, user); store.deleteQuestion(id, qid); return { ok: true }; }],
+  ['DELETE', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)$/, (req, user, [id, qid]) => { edit(id, user); store.deleteQuestion(id, qid, { by: user.id }); return { ok: true }; }],
   // progress: anyone who can see the course, each into their own records
   ['POST', /^\/api\/courses\/([^/]+)\/attempt$/, async (req, user, [id]) => { view(id, user); return store.recordAttempt(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/flag$/, async (req, user, [id]) => { view(id, user); return store.setFlags(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/exam$/, async (req, user, [id]) => { view(id, user); return store.recordExam(id, user.id, await readBody(req)); }],
   ['GET', /^\/api\/courses\/([^/]+)\/exams\/(\d+)$/, (req, user, [id, eid]) => { view(id, user); return store.examDetail(id, user.id, eid); }],
+  // reports of mistakes in questions: to the course's owner (from a fork: to the course it came from), and the answer back
+  ['GET', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/report$/, (req, user, [id, qid]) => { view(id, user); return store.reportInfo(id, user, qid); }],
+  ['POST', /^\/api\/courses\/([^/]+)\/questions\/([^/]+)\/report$/, async (req, user, [id, qid]) => { view(id, user); return store.createReport(id, user, { ...(await readBody(req)), qid }); }],
+  ['GET', /^\/api\/reports$/, (req, user) => store.listReports(user)],
+  ['GET', /^\/api\/reports\/unread$/, (req, user) => ({ count: store.unreadReports(user) })],
+  // owners' profiles and direct messages
+  ['GET', /^\/api\/inbox\/unread$/, (req, user) => { const reports = store.unreadReports(user), messages = store.unreadDms(user.id); return { count: reports + messages, reports, messages }; }],
+  ['GET', /^\/api\/users\/([^/]+)$/, (req, user, [name]) => store.userProfile(name, user)],
+  ['GET', /^\/api\/messages$/, (req, user) => store.conversations(user.id)],
+  ['GET', /^\/api\/messages\/([^/]+)$/, (req, user, [name]) => store.dmThread(user, name)],
+  ['POST', /^\/api\/messages\/([^/]+)$/, async (req, user, [name]) => store.sendDm(user, name, await readBody(req))],
+  ['GET', /^\/api\/reports\/(\d+)$/, (req, user, [rid]) => store.getReport(rid, user)],
+  ['PATCH', /^\/api\/reports\/(\d+)$/, async (req, user, [rid]) => store.replyReport(rid, user, await readBody(req))],
+  ['DELETE', /^\/api\/reports\/(\d+)$/, (req, user, [rid]) => { store.deleteReport(rid, user); return { ok: true }; }],
+  ['POST', /^\/api\/reports\/(\d+)\/apply$/, (req, user, [rid]) => store.applyReportFix(rid, user)],
+  ['PUT', /^\/api\/courses\/([^/]+)\/pin$/, async (req, user, [id]) => { edit(id, user); return store.setPinned(id, user.id, !!(await readBody(req)).pinned); }],
   ['PUT', /^\/api\/courses\/([^/]+)\/settings$/, async (req, user, [id]) => { view(id, user); return store.setSettings(id, user.id, await readBody(req)); }],
   ['POST', /^\/api\/courses\/([^/]+)\/reset-progress$/, (req, user, [id]) => { view(id, user); store.resetProgress(id, user.id); return { ok: true }; }],
 ];
