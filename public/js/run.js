@@ -103,6 +103,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
         <button class="icon-btn" data-act="exit" title="Leave (progress is kept)" aria-label="Leave">✕</button>
         <div class="run-title"><span class="run-module">${esc(s.title)}</span><span class="run-count" aria-live="polite"></span></div>
         <span class="timer" hidden></span>
+        <button class="btn ghost small end-btn" data-act="end" hidden title="End the round now and see the results of what you answered">End</button>
         <button class="icon-btn" data-act="nav" title="Question list (M)" aria-label="Question list">▦</button>
       </header>
       <div class="progress" aria-hidden="true"><div class="progress-fill"></div></div>
@@ -148,7 +149,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
       onSelfGrade: (mode === 'practice' || mode === 'grade' || (mode === 'review' && isOpen(question.type) && !isExam)) ? (v) => selfGrade(question, st, v, mode) : null,
       footer: showFeedback && mode !== 'grade' ? noteFooter(question, p) : null,
     };
-    main.replaceChildren(questionCard(question, st, ctx), questionTools(p, mode));
+    main.replaceChildren(questionCard(question, st, ctx), questionTools(p, mode), skipNote());
     $('.run-count', root).textContent = mode === 'grade'
       ? `Grade short answers · ${curIdx() + 1} / ${ids.length}`
       : `${curIdx() + 1} / ${ids.length}${missed ? ' missed' : ''}`;
@@ -186,6 +187,14 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     const verify = $('.verify', root);
     verify.hidden = mode === 'exam';
     verify.href = googleUrl(question);
+    $('.end-btn', root).hidden = mode !== 'practice';
+    const note = $('.skip-note', main);
+    note.hidden = mode !== 'practice' || st.submitted || (!st.skipped && !isBlank(question, st.response));
+    note.textContent = st.skipped
+      ? 'Skipped: counted as wrong, so this question is in Mistakes. You can still answer it.'
+      : s.module === 'mistakes'
+        ? 'Skip counts as wrong: the question stays in Mistakes and its streak starts over.'
+        : 'Skip counts as wrong: the question goes to Mistakes.';
     if (mode === 'practice') {
       // the single action button: Submit once something is entered, Skip while the answer is empty
       if (!st.submitted && !isBlank(question, st.response)) { btn.textContent = 'Submit'; btn.dataset.do = 'submit'; }
@@ -291,7 +300,6 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     if (st.submitted || st.skipped) return;
     st.skipped = true;
     save();
-    toast('Skipped — added to Mistakes', 'info', 1800);
     recordAttempt(courseId, { qid: question.id, correct: false, score: 0, response: null, mode: s.module })
       .then(() => drawNav())
       .catch((e) => toast(`Not saved: ${e.message}`, 'error'));
@@ -389,6 +397,31 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     navigate(page('result'));
   }
 
+  /** End a long practice round early: the results cover what was answered (or skipped); the rest isn't counted. */
+  async function endNow() {
+    if (blockedByGrading()) return;
+    const done = s.qids.filter((id) => s.entries[id]?.submitted || s.entries[id]?.skipped);
+    if (!done.length) {
+      if (!(await confirmDialog('End this round?', 'Nothing has been answered yet, so there are no results. The round is deleted.', 'End', true))) return;
+      sessions.clear(courseId, slot);
+      navigate(`#/c/${encodeURIComponent(courseId)}`);
+      return;
+    }
+    const left = s.qids.length - done.length;
+    if (left && !(await confirmDialog('End this round now?', `You've answered ${done.length} of ${s.qids.length}. The results cover those; the ${left} you haven't reached aren't counted.`, 'End & see results'))) return;
+    s.qids = done;
+    s.idx = 0;
+    finish();
+  }
+
+  /** Practice: what Skip does, said under the question rather than in a toast (updateActions shows and words it). */
+  function skipNote() {
+    const note = document.createElement('p');
+    note.className = 'hint skip-note';
+    note.hidden = true;
+    return note;
+  }
+
   /**
    * Star, re-parse and report, under the question card. Re-parse is hidden during a mock exam (no peeking at the source)
    * and for courses you don't own; report is there whenever someone else owns the question (your fork's original), in
@@ -444,6 +477,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     }
     const act = t.dataset.act;
     if (act === 'exit') exit();
+    else if (act === 'end') endNow();
     else if (act === 'nav') { nav.classList.toggle('open'); showCurrentCell(); }
     else if (act === 'reparse') {
       const res = await openReparse(courseId, q().id);

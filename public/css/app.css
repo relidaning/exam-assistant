@@ -477,6 +477,7 @@ body[data-route="run"], body[data-route="review"], body[data-route="review-misse
 .run-module { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-count { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .92rem; }
 .timer { font-variant-numeric: tabular-nums; font-weight: 700; padding: .2em .6em; border-radius: 8px; background: var(--accent-soft); color: var(--accent-ink); }
+.run-bar .end-btn { flex: none; color: var(--muted); }
 .timer.subtle { background: none; color: var(--muted); font-weight: 500; }
 .timer.low { background: var(--bad-soft); color: var(--bad); animation: pulse 1s infinite alternate; }
 @keyframes pulse { to { opacity: .6; } }
@@ -658,6 +659,7 @@ body[data-route="run"], body[data-route="review"], body[data-route="review-misse
 .btn.primary .key-hint { color: inherit; background: transparent; border-color: currentColor; opacity: .7; }
 @media (hover: none) { .key-hint { display: none; } }  /* touch screens: no keyboard to hint at */
 .q-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.skip-note { margin-top: 12px; }
 .q-tools .btn { min-height: 38px; padding: .35em .9em; font-size: .9rem; color: var(--muted); }
 .q-tools .btn.on { color: var(--accent-ink); border-color: var(--accent); background: var(--accent-soft); }
 .q-tools .qt-icon { margin-right: .35em; }

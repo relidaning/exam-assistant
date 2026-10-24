@@ -18,7 +18,7 @@ const TYPE_ORDER = ['judge', 'single', 'multi', 'fill', 'calc', 'term', 'short',
 /** Tag carried by questions imported from past exam papers; the mock exam can draw from these only. */
 export const PAST_PAPER_TAG = 'past-paper';
 
-export function inMistakes(p, mastery = 5) {
+export function inMistakes(p, mastery = 3) {
   return !!p && p.wrong > 0 && (p.streak || 0) < mastery && !p.cleared;
 }
 
@@ -55,7 +55,7 @@ export function moduleConfig(module, settings = {}) {
  */
 export function pickQuestions(course, progress, cfg, rand = Math.random) {
   const prog = progress.questions || {};
-  const mastery = cfg.mastery ?? 5;
+  const mastery = cfg.mastery ?? 3;
   const qs = course.questions.filter((q) => {
     if (cfg.types?.length && !cfg.types.includes(q.type)) return false;
     if (cfg.tag && !(q.tags || []).includes(cfg.tag)) return false;

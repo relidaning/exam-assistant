@@ -47,9 +47,9 @@ Your own courses and your forks. Open one and pick a module:
 
 | Module | What it does |
 |---|---|
-| **Practice** | Questions in random order, with the answer and explanation right after each one |
+| **Practice** | Questions in random order, with the answer and explanation right after each one. Skipping a question counts as wrong and puts it in Mistakes. **End** in the top bar stops a long round early and shows results for what you answered |
 | **Mock exam** | Timed, with no feedback until you hand in. With past papers loaded, you choose a real paper and sit it exactly as it was set; otherwise the exam draws questions by your settings. A paper you've sat has a Review button in the paper list (and in Statistics) that reopens that sitting with your answers |
-| **Mistakes** | Everything you got wrong. A question leaves after 5 right answers in a row, or when you remove it |
+| **Mistakes** | Everything you got wrong. A question leaves after 3 right answers in a row, or when you remove it |
 | **Starred** | Questions you've saved with ☆ |
 | **Statistics** | How much you've practised, your accuracy by type and chapter, your daily activity, your mock exam scores and your most-missed questions |
 

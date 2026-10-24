@@ -248,9 +248,12 @@ test('store: import merges by id, progress and mistakes book', () => {
   store.recordAttempt(c.id, U, { qid, correct: false });
   let p = store.getProgress(c.id, U).questions[qid];
   assert.ok(store.inWrongBook(p));
-  for (let i = 0; i < store.MASTERY_STREAK; i++) store.recordAttempt(c.id, U, { qid, correct: true });
+  assert.equal(store.MASTERY_STREAK, 3);
+  for (let i = 0; i < 2; i++) store.recordAttempt(c.id, U, { qid, correct: true });
+  assert.ok(store.inWrongBook(store.getProgress(c.id, U).questions[qid]), 'still in the book after 2 right in a row');
+  store.recordAttempt(c.id, U, { qid, correct: true });
   p = store.getProgress(c.id, U).questions[qid];
-  assert.ok(!store.inWrongBook(p), 'mastered after a streak');
+  assert.ok(!store.inWrongBook(p), 'leaves the book after 3 right in a row');
   assert.equal(p.wrong, 1);
   store.recordAttempt(c.id, U, { qid, correct: false });
   assert.ok(store.inWrongBook(store.getProgress(c.id, U).questions[qid]), 'back in the book after a new mistake');
