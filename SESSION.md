@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-24 — Mistakes book back to 3 right in a row
+The user found 5 too many, so a question now leaves Mistakes after 3 right answers in a row again (`MASTERY_STREAK` in `lib/store.mjs`, the defaults in `public/js/session.js`, README, CLAUDE.md). Full streaks are stored, so questions at 3 or 4 left the book right away without a migration, but an open Mistakes round still holds them until it is deleted and restarted. `npm test` passes (34). The restart's `kill $(pgrep -f "node server.mjs")` failed because the pattern matched the agent's own shell, and no old server could be found. A new one was started and port 8710 answers 200. CLAUDE.md now says to use the anchored `^node server.mjs`. The work is uncommitted.
+
 ## 2026-10-23 — App icon matches BeSmart and FloatingSphere
 The user wanted this app's icon to look like part of a series with their BeSmart and FloatingSphere apps. `public/icon.svg` was redrawn on BeSmart's 100×100 grid and uses the same dark tile (`#0d0e13`), a thick ring around a glass disc, and amber `#fabf40`. Its own touches: the ring has 12 segments (9 amber for "answered", 3 dim), and the disc holds an answer sheet with two ticks. `scripts/icons.mjs` now assumes that 100×100 grid, and the four PNGs were rebuilt (the first `npm run icons` errored, and the second run worked). Committed and pushed as `330ea08`. Phones may keep showing the old icon until the app is re-added to the home screen. Changing the light `background_color` in `manifest.json` to the tile colour was offered but not done.
 

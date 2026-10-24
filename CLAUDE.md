@@ -10,8 +10,9 @@ types per module, exam composition/duration) decide what each module asks. Theme
 
 - `npm start` — server on `http://localhost:8710` (binds 0.0.0.0 so a phone on the LAN can use it; `PORT`, `HOST`,
   `EXAM_DATA_DIR` env vars override). No service starts it, so start it detached (`nohup setsid npm start …`), or it
-  stops when the shell exits. To restart, kill the old one by PID (`pgrep -f "node server.mjs"`), not with a
-  `pgrep/pkill -f "npm start"` in the same command line that starts it: that matches its own shell. To check UI changes in a browser, run a second server on a copy of the data
+  stops when the shell exits. To restart, kill the old one by PID with an anchored pattern (`pgrep -f "^node server.mjs"`)
+  in its own command, then start it in the next: an unanchored `pgrep/pkill -f "node server.mjs"` or `"npm start"` also
+  matches the agent's own shell, whose command line contains the pattern. To check UI changes in a browser, run a second server on a copy of the data
   (`EXAM_DATA_DIR=<copy> PORT=8799`) so the user's real sessions and stats aren't touched
 - `npm test` — unit + API tests (node:test). `npm run test:e2e` — Playwright run through every question type at
   desktop and phone sizes (uses /usr/bin/google-chrome; screenshots dir as optional arg)
