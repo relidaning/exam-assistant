@@ -55,7 +55,8 @@ Format reference: `docs/FORMAT.md`. Never write to `data/exam.db` by hand — go
   forked from, `store.reportTarget`; `question_id` follows re-parses; the reporter can pull the fix into their fork).
   Changing a question's answer key (re-parse, re-import, patch) re-grades everyone's stored answers to it
   (`store.regradeQuestion`: attempts + question_state, exam sittings, sessions); the browser then reloads its rounds
-  (`sessions.reload`) instead of saving its older copies over them. A question's id is a hash of type + stem + options,
+  (`sessions.reload`) instead of saving its older copies over them, and flushes its pending save before opening
+  Re-parse (else a save from the last 400 ms lands after the fix). A question's id is a hash of type + stem + options,
   so a re-parse that changes them moves its progress to the new id; if that id already exists in the course, the two
   copies merge (`mergeInto`: both answer logs, stars and notes kept, the twin keeps its place, logged as a merge).
   course_log: every change to a course (created/forked, details, publish, imports, question edits with before/after,
