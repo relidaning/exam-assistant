@@ -408,7 +408,21 @@ try {
   await page.waitForSelector('.qcard');
   check((await page.textContent('.run-count')) === `1 / ${missedN} missed`, `missed review goes through the missed only (${await page.textContent('.run-count')})`);
   let wrongSeen = 0;
-  for (let n = 0; n < missedN; n++) {
+  {
+    // a re-parse in the middle of it stays in the missed review, on the same question
+    const at = missedN > 1 ? 1 : 0;
+    if (at) { await page.click('[data-act="main"]'); await page.waitForFunction((t) => document.querySelector('.run-count')?.textContent === t, `2 / ${missedN} missed`); }
+    await page.click('.q-tools [data-act="reparse"]');
+    await page.waitForSelector('dialog.reparse .reparse-result');
+    await page.fill('.reparse-text', (await page.inputValue('.reparse-text')).replace(/^(\d+\.\s*)?/, '$1(fixed) '));
+    await page.waitForFunction(() => document.querySelector('.reparse-result')?.textContent.includes('(fixed)'));
+    await page.click('dialog.reparse [data-act="save"]');
+    await page.waitForSelector('dialog.reparse', { state: 'detached' });
+    await page.waitForFunction(() => document.querySelector('.qcard')?.textContent.includes('(fixed)'));
+    check((await page.textContent('.run-count')) === `${at + 1} / ${missedN} missed`, `a re-parse keeps the missed review on that question (${await page.textContent('.run-count')})`);
+    wrongSeen = at; // the walk below goes on from here (the ones before were missed: the count says so)
+  }
+  for (let n = wrongSeen; n < missedN; n++) {
     if (await page.$('.verdict.right')) break;
     wrongSeen++;
     await page.click('[data-act="main"]'); // Next ›, then Results on the last

@@ -5,7 +5,7 @@
 import { $, $$, esc, toast, confirmDialog, fmtDuration, pct, topbar } from './ui.js';
 import { grade, isBlank, TYPE_LABELS, isOpen } from './grade.js';
 import { questionCard, googleUrl } from './answer.js';
-import { loadCourse, recordAttempt, setFlags, recordExam, sessions, syncSessions, beforeExit } from './data.js';
+import { loadCourse, recordAttempt, setFlags, recordExam, sessions, syncSessions, flushSessions, beforeExit } from './data.js';
 import { MODULES, scoreExam, pointsFor, inMistakes } from './session.js';
 import { navigate } from './nav.js';
 import { openReparse } from './reparse.js';
@@ -72,8 +72,11 @@ function entry(s, qid) {
 /** A finished round's missed questions: wrong or partly right, unanswered ones included (they were graded too). */
 const missedIds = (s, data) => s.qids.filter((id) => data.byId.has(id) && s.entries[id]?.result && !s.entries[id].result.correct);
 
-/** missedOnly: reviewing a finished round goes through its missed questions only (reviewIdx counts within them). */
-export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = false } = {}) {
+/**
+ * missedOnly: reviewing a finished round goes through its missed questions only (reviewIdx counts within them).
+ * at: open on this question when it is in the list (after a re-parse), else at reviewIdx.
+ */
+export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = false, at } = {}) {
   teardownRun();
   const data = await loadCourse(courseId);
   await syncSessions(courseId); // another device may have moved this round on
@@ -87,6 +90,7 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
   const missed = missedOnly && s.phase === 'done' ? missedIds(s, data) : null;
   if (missed && !missed.length) { navigate(`#/c/${encodeURIComponent(courseId)}/result/${slot}`); return; }
   if (reviewIdx != null) s.idx = Math.min(Math.max(0, reviewIdx), (missed || s.qids).length - 1);
+  if (at && s.phase !== 'grading' && (missed || s.qids).includes(at)) s.idx = (missed || s.qids).indexOf(at);
 
   const isExam = s.module === 'exam';
   const view = () => {
@@ -480,11 +484,14 @@ export async function renderRun(root, courseId, slot, { reviewIdx, missedOnly = 
     else if (act === 'end') endNow();
     else if (act === 'nav') { nav.classList.toggle('open'); showCurrentCell(); }
     else if (act === 'reparse') {
+      // a save still waiting would land after the re-parse and put the question's old id back into the round
+      await flushSessions(courseId);
       const res = await openReparse(courseId, q().id);
       if (!res) return;
       await sessions.reload(courseId);
       await loadCourse(courseId, { force: true });
-      renderRun(root, courseId, slot);
+      // stay where you were: a review of the missed stays on them (a question now right gives way to the next one)
+      renderRun(root, courseId, slot, { missedOnly, reviewIdx: s.phase === 'done' ? curIdx() : undefined, at: res.question.id });
     }
     else if (act === 'report') openReport(courseId, q());
     else if (act === 'nav-close') nav.classList.remove('open');
