@@ -107,6 +107,21 @@ test('grading per type', () => {
   assert.deepEqual(r.detail.keywordHits, ['scalar']);
 });
 
+test('fill: an x/y key accepts x and y', () => {
+  const rw = normalizeQuestion({ stem: 'CPU 将地址和 ____ 命令送到总线', answer: '读/写' });
+  for (const r of ['读', '写', '读/写', '读／写']) assert.equal(grade(rw, [r]).correct, true, r);
+  assert.equal(grade(rw, ['控制']).correct, false);
+  const cf = normalizeQuestion({ stem: 'CF 表示 ____', answer: '进/借位' });
+  assert.deepEqual(['进位', '借位', '进'].map((r) => grade(cf, [r]).correct), [true, true, false], 'the shorter side shares the suffix');
+  const io = normalizeQuestion({ stem: '键盘被抽象为 ____', answer: '标准输入/输出' });
+  assert.deepEqual(['标准输入', '标准输出'].map((r) => grade(io, [r]).correct), [true, true], 'or the prefix');
+  assert.equal(grade(normalizeQuestion({ stem: 'bus does ____', answer: 'read/write' }), ['write']).correct, true);
+  for (const key of ['1/x', '3V/m', '1000Mbit/s', 'I/O', 'TCP/IP', 'km/h']) {
+    const q = normalizeQuestion({ stem: 'x = ____', answer: key });
+    assert.equal(grade(q, [key.split('/')[1]]).correct, false, `${key} is one answer`);
+  }
+});
+
 test('fill blanks in any order', () => {
   // "____和____" names two things in no particular order
   const cpu = normalizeQuestion({ stem: '中央处理器 (CPU) 的基本部件是____和____。', answer: '运算器; 控制器' });

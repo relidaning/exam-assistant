@@ -32,6 +32,9 @@ Everything is normalized into one schema (`lib/normalize.mjs`). Input can be loo
 | calc | `"1/3"`, `"9.8 m/s^2"`, `"11.48 ± 0.05 m"`, `"100 ± 2%"`, `"x = 2; y = -1"`, `[{label, value, unit, tol, rel}]` | `[{"value":0.333…}]` |
 | short | reference answer text (Markdown) | string |
 
+A key written `x/y` accepts x, y or the whole: `读/写` → 读, 写; a shorter side shares the longer one's ending or start
+(`进/借位` → 进位, 借位; `标准输入/输出` → 标准输入, 标准输出). Only words split — CJK, or lowercase words of 3+ letters
+(`read/write`); `1/x`, `3V/m`, `Mbit/s`, `I/O`, `TCP/IP` stay one answer.
 Blanks in fill questions are `___` (3+ underscores) or cloze `{{answer|alt}}` (answer taken from the braces).
 Blanks side by side joined only by 和 / 与 / 及 / 或 / and / or (`____和____`) are graded in any order, unless the stem
 says 分别 / 依次 / 前者 / respectively. Lists joined by 、 or commas keep their order (often set phrases). Set `anyOrder`

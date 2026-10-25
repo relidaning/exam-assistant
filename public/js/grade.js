@@ -140,10 +140,26 @@ export function normText(s) {
     .trim();
 }
 
+const CJK_RE = /[㐀-鿿]/;
+
+/**
+ * The answers an "x/y" key stands for: "读/写" → 读, 写; "编码/译码" → 编码, 译码. A shorter side swaps in for the same
+ * length at that end of the longer one: "进/借位" → 进位, 借位; "标准输入/输出" → 标准输入, 标准输出.
+ * Only words split (CJK on each side, or lowercase words of 3+ letters): "1/x", "3V/m", "Mbit/s", "I/O", "TCP/IP" stay whole.
+ */
+export function slashAlternatives(key) {
+  const parts = String(key ?? '').split(/\s*[/／]\s*/);
+  if (parts.length < 2 || !parts.every((p) => CJK_RE.test(p) || /^[a-z]{3,}(?: [a-z]+)*$/.test(p))) return [];
+  if (parts.length > 2) return parts;
+  const [l, r] = parts;
+  if (!CJK_RE.test(l + r) || l.length === r.length) return parts;
+  return l.length < r.length ? [l + r.slice(l.length), r] : [l, l.slice(0, l.length - r.length) + r];
+}
+
 function textMatches(user, accepted) {
   const u = normText(user);
   if (!u) return false;
-  for (const a of accepted) {
+  for (const a of accepted.flatMap((k) => [k, ...slashAlternatives(k)])) {
     const n = normText(a);
     if (u === n) return true;
     // ignore spaces and CJK punctuation/quotes inside the answer: "坚持和发展、怎样坚持" == "坚持和发展怎样坚持"
