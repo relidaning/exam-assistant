@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-26 — Linux study question: why `lsof -i:8080` printed nothing
+This was a study question from the Linux course, with no app changes. The user's `lsof -i:8080` printed nothing because the listener is Docker's root-owned `docker-proxy`, and `lsof` run without sudo silently skips other users' processes. The suggested full answer to "kill the program on port 80" was `sudo kill $(lsof -t -i :80)` or `sudo fuser -k 80/tcp`, with `-i :80` rather than `-i: 80`.
+
 ## 2026-10-25 — Bottom buttons drifting in Mistakes (not reproduced); x/y keys and Re-parse committed
 The user reported that in Mistakes, after tapping Answer and scrolling up, the fixed bottom buttons moved with the page. It didn't reproduce in phone-sized Chrome on the demo course, or on a copy of the real data (all 40 Mistakes in 计算机系统原理 revealed, none wider than the screen), so nothing was changed. The user was asked for the phone/browser, which buttons moved, how, and the question type; the leading guess is iOS Safari mishandling `overflow-x: hidden` on `body` (fix to try: `overflow-x: clip`). On request, the previous session's work was committed and pushed as `2e73f35` (x/y fill keys) and `d9c55be` (Re-parse keeps the missed review); `npm test` passed, e2e was not re-run.
 
