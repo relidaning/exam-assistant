@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-28 — Server runs as a systemd user service
+The app was down after a laptop restart because the server had only been started by hand. It now runs as the systemd user service `exam-assistant` (`~/.config/systemd/user/exam-assistant.service`, `Restart=on-failure`, enabled, with linger on so it starts at boot before login). ExecStart uses the absolute nvm node path (v24.15.0), which needs updating if the Node version changes. It answers 200 on 8710. CLAUDE.md now says to restart it with `systemctl` instead of the old nohup/pgrep steps (committed and pushed as `403ff6e`).
+
 ## 2026-10-26 — Linux study question: why `lsof -i:8080` printed nothing
 This was a study question from the Linux course, with no app changes. The user's `lsof -i:8080` printed nothing because the listener is Docker's root-owned `docker-proxy`, and `lsof` run without sudo silently skips other users' processes. The suggested full answer to "kill the program on port 80" was `sudo kill $(lsof -t -i :80)` or `sudo fuser -k 80/tcp`, with `-i :80` rather than `-i: 80`.
 
