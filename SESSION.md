@@ -1,5 +1,8 @@
 # Sessions
 
+## 2026-10-29 — Redis course (64 questions, AI-written answer keys)
+Imported a new private course, Redis (`#/c/redis`, owner lidaning), with 64 questions in 8 chapters: 30 single choice, 6 multiple choice, 8 true/false, 8 fill-in-the-blank, 5 calculation and 7 short answer. The web sources found (javaguides, OneUptime, TechPrep, besthub, DEV) were Q&A articles, not past papers, and some of their answer keys were wrong (for example, one claimed Redis has a fixed limit on keys). So the questions and answers were written by Claude from those topics and the redis.io docs, and tagged `generated` and `ai-answer`. The source JSON stayed in the session scratchpad, not the repo. When the user asked to commit, there was nothing to commit because the import only touched the git-ignored `data/exam.db`; adding the bank to the repo as `examples/redis.json` was offered.
+
 ## 2026-10-28 — Server runs as a systemd user service
 The app was down after a laptop restart because the server had only been started by hand. It now runs as the systemd user service `exam-assistant` (`~/.config/systemd/user/exam-assistant.service`, `Restart=on-failure`, enabled, with linger on so it starts at boot before login). ExecStart uses the absolute nvm node path (v24.15.0), which needs updating if the Node version changes. It answers 200 on 8710. CLAUDE.md now says to restart it with `systemctl` instead of the old nohup/pgrep steps (committed and pushed as `403ff6e`).
 
