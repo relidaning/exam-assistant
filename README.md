@@ -185,8 +185,24 @@ only when you link it from Settings → Account while signed in. If a first sign
 
 ## Your data
 
-Everything lives in one file, `data/exam.db`. Images and audio from your notes are copied to `data/media/`. It's saved
-as you go, so restarting the app loses nothing.
+The SQLite database defaults to `data/exam.db`. Imported images and audio are stored in `data/media/`.
+
+To use a different database file, set `dbFile` in `config.json` at the app root on each machine:
+
+```json
+{
+  "dbFile": "/absolute/path/to/cloud-folder/exam.db"
+}
+```
+
+Relative paths are resolved from the directory containing the config file. To use a different config file,
+set `EXAM_CONFIG_FILE`. The server, import, backup, and account merge commands all use this setting.
+Restart the server after changing it. SQLite creates a new database if the configured file is missing.
+
+To move an existing database, stop the server and any other processes using it, then move the database after
+SQLite has closed it and checkpointed the WAL. You can also use a snapshot from `npm run backup` as the initial
+cloud copy. With a file-sync service, use one machine at a time. Close the app and let syncing finish before
+opening it on another machine. Sync or copy `data/media/` separately if your courses use imported images or audio.
 
 - `npm run backup` writes a snapshot to `data/backups/` and keeps the newest 30. It's safe while the app is running.
 - A course's Settings → Export saves its questions as JSON.

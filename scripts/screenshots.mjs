@@ -12,6 +12,7 @@ const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const out = path.resolve(process.argv[2] || path.join(root, 'docs/screenshots'));
 fs.mkdirSync(out, { recursive: true });
 process.env.EXAM_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-shots-data-'));
+process.env.EXAM_CONFIG_FILE = path.join(process.env.EXAM_DATA_DIR, 'config.json');
 const importer = path.join(root, 'scripts/import.mjs');
 execFileSync('node', [importer, '--course', 'Calculus & Physics', path.join(root, 'examples/demo-course.md')], { env: process.env, stdio: 'ignore' });
 

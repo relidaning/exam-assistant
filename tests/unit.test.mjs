@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 process.env.EXAM_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-unit-'));
+process.env.EXAM_CONFIG_FILE = path.join(process.env.EXAM_DATA_DIR, 'config.json');
 const { evaluate, parseNumeric, grade, normText, answerText } = await import('../public/js/grade.js');
 const { normalizeQuestion, normalizeAll, parseLetters, parseCalcPart, blanksAnyOrder } = await import('../lib/normalize.mjs');
 const { parseMarkdown } = await import('../lib/parse-md.mjs');

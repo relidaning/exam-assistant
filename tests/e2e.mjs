@@ -11,6 +11,7 @@ const shots = process.argv[2] || fs.mkdtempSync(path.join(os.tmpdir(), 'exam-sho
 fs.mkdirSync(shots, { recursive: true });
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exam-data-'));
 process.env.EXAM_DATA_DIR = dataDir;
+process.env.EXAM_CONFIG_FILE = path.join(dataDir, 'config.json');
 Object.assign(process.env, { GOOGLE_CLIENT_ID: 'e2e', GOOGLE_CLIENT_SECRET: 'e2e', GITHUB_CLIENT_ID: 'e2e', GITHUB_CLIENT_SECRET: 'e2e' }); // shows the buttons
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 execFileSync('node', [path.join(root, 'scripts/import.mjs'), '--course', 'Demo', path.join(root, 'examples/demo-course.md')], { env: process.env, stdio: 'ignore' });
