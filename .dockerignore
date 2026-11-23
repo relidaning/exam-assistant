@@ -1,0 +1,8 @@
+*
+!package.json
+!package-lock.json
+!server.mjs
+!lib/
+!public/
+!scripts/
+!examples/

@@ -26,6 +26,15 @@ npm start        # then open http://localhost:8710
 The first account you create becomes the **admin**. When the app starts, it also prints its address on your local
 network. Open that on your phone (same Wi-Fi), and add it to your home screen to use it like an app.
 
+### Run with Docker Compose
+
+```bash
+docker compose up --build -d --wait
+docker compose exec app npm run demo  # optional sample course
+```
+
+Open <http://localhost:8710> or use the host's IP address from another device on your network. Compose publishes the app on all IPv4 interfaces by default. Set `EXAM_PORT` to change the host port or `EXAM_BIND_ADDRESS=127.0.0.1` to restrict access to this machine. SQLite and imported media are stored in the `exam-data` volume, which persists when the container is replaced. The container starts with its own database and uses the default app configuration.
+
 ## Using it
 
 Four tabs: along the bottom on a phone, down the left side on a laptop or desktop. Signed in, the app opens on **My courses**.

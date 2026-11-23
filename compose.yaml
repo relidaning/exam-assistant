@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    init: true
+    ports:
+      - "${EXAM_BIND_ADDRESS:-0.0.0.0}:${EXAM_PORT:-8710}:8710"
+    volumes:
+      - exam-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8710/').then(response => process.exit(response.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  exam-data:
