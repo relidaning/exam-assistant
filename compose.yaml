@@ -5,7 +5,22 @@ services:
     ports:
       - "${EXAM_BIND_ADDRESS:-0.0.0.0}:${EXAM_PORT:-8710}:8710"
     volumes:
-      - exam-data:/app/data
+      - type: bind
+        source: ./uploads
+        target: /app/data/media
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./config.json
+        target: /app/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/nextcloud/lidaning/db
+        target: /data/nextcloud/lidaning/db
+        bind:
+          create_host_path: false
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8710/').then(response => process.exit(response.ok ? 0 : 1), () => process.exit(1))"]
@@ -13,6 +28,3 @@ services:
       timeout: 3s
       retries: 3
       start_period: 10s
-
-volumes:
-  exam-data:

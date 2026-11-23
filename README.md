@@ -29,11 +29,14 @@ network. Open that on your phone (same Wi-Fi), and add it to your home screen to
 ### Run with Docker Compose
 
 ```bash
+mkdir -p uploads
 docker compose up --build -d --wait
 docker compose exec app npm run demo  # optional sample course
 ```
 
-Open <http://localhost:8710> or use the host's IP address from another device on your network. Compose publishes the app on all IPv4 interfaces by default. Set `EXAM_PORT` to change the host port or `EXAM_BIND_ADDRESS=127.0.0.1` to restrict access to this machine. SQLite and imported media are stored in the `exam-data` volume, which persists when the container is replaced. The container starts with its own database and uses the default app configuration.
+Open <http://localhost:8710> or use the host's IP address from another device on your network. Compose publishes the app on all IPv4 interfaces by default. Set `EXAM_PORT` to change the host port or `EXAM_BIND_ADDRESS=127.0.0.1` to restrict access to this machine.
+
+Compose reads `dbFile` from the host's `config.json` and mounts `/data/nextcloud/lidaning/db` at the same path in the container. On another host, create `config.json` with the database path and update the directory mount in `compose.yaml` to match. The container user (UID 1000) needs write access to the directory and the database so SQLite can manage its WAL and shared-memory files. Docker stores imported attachments in the project's `uploads/` directory, which also needs to be writable by the container user. Follow the single-machine usage guidance below for synced folders.
 
 ## Using it
 
